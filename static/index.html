@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sparkit BD Agent</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f0f13; color: #e0e0e0; min-height: 100vh; }
+
+  header { padding: 24px 40px; border-bottom: 1px solid #222; display: flex; align-items: center; gap: 12px; }
+  header h1 { font-size: 20px; font-weight: 600; color: #fff; }
+  header .badge { background: #7c3aed; color: #fff; font-size: 11px; padding: 2px 8px; border-radius: 99px; }
+
+  .main { max-width: 960px; margin: 0 auto; padding: 40px 24px; }
+
+  .search-box { display: flex; gap: 12px; margin-bottom: 40px; }
+  .search-box input {
+    flex: 1; background: #1a1a24; border: 1px solid #333; border-radius: 8px;
+    padding: 12px 16px; color: #fff; font-size: 15px; outline: none;
+    transition: border-color 0.2s;
+  }
+  .search-box input:focus { border-color: #7c3aed; }
+  .search-box input::placeholder { color: #555; }
+  .search-box button {
+    background: #7c3aed; color: #fff; border: none; border-radius: 8px;
+    padding: 12px 24px; font-size: 15px; font-weight: 500; cursor: pointer;
+    transition: background 0.2s; white-space: nowrap;
+  }
+  .search-box button:hover { background: #6d28d9; }
+  .search-box button:disabled { background: #444; cursor: not-allowed; }
+
+  /* Pipeline log */
+  #log { margin-bottom: 40px; }
+  .log-entry {
+    display: flex; align-items: flex-start; gap: 12px;
+    padding: 10px 0; border-bottom: 1px solid #1a1a24;
+    animation: fadeIn 0.3s ease;
+  }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+  .log-icon { width: 20px; height: 20px; border-radius: 50%; flex-shrink: 0; margin-top: 2px; display: flex; align-items: center; justify-content: center; font-size: 11px; }
+  .log-icon.search  { background: #1e3a5f; color: #60a5fa; }
+  .log-icon.research { background: #1a3a2a; color: #34d399; }
+  .log-icon.score   { background: #3a2a1a; color: #fbbf24; }
+  .log-icon.email   { background: #2a1a3a; color: #a78bfa; }
+  .log-icon.skip    { background: #2a1a1a; color: #f87171; }
+  .log-icon.done    { background: #1a3a1a; color: #4ade80; }
+  .log-text { font-size: 13px; color: #aaa; line-height: 1.5; flex: 1; }
+  .log-text strong { color: #e0e0e0; }
+  .log-text a { color: #60a5fa; text-decoration: none; }
+  .log-text a:hover { text-decoration: underline; }
+  .log-text .score-badge {
+    display: inline-block; background: #1a1a24; border: 1px solid #333;
+    border-radius: 4px; padding: 1px 6px; font-size: 12px; margin-left: 6px;
+  }
+  .score-5 { color: #4ade80; } .score-4 { color: #a3e635; }
+  .score-3 { color: #fbbf24; } .score-2 { color: #fb923c; } .score-1 { color: #f87171; }
+
+  .log-details { margin-top: 8px; padding: 8px 12px; background: #13131c; border-radius: 6px; font-size: 12px; color: #888; line-height: 1.6; }
+  .log-details-item { padding: 4px 0; border-bottom: 1px solid #1a1a24; }
+  .log-details-item:last-child { border-bottom: none; }
+  .log-toggle { cursor: pointer; color: #7c3aed; font-size: 11px; margin-left: 8px; user-select: none; }
+  .log-toggle:hover { text-decoration: underline; }
+
+  /* Spinner */
+  .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid #333; border-top-color: #7c3aed; border-radius: 50%; animation: spin 0.7s linear infinite; margin-right: 8px; vertical-align: middle; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Results */
+  #results { display: none; }
+  #results h2 { font-size: 18px; font-weight: 600; margin-bottom: 20px; color: #fff; }
+
+  .target-card {
+    background: #1a1a24; border: 1px solid #2a2a3a; border-radius: 12px;
+    margin-bottom: 20px; overflow: hidden;
+  }
+  .card-header {
+    padding: 16px 20px; display: flex; align-items: center; gap: 12px;
+    cursor: pointer; user-select: none;
+  }
+  .card-header:hover { background: #1e1e2e; }
+  .rank { width: 28px; height: 28px; border-radius: 50%; background: #7c3aed; color: #fff; font-size: 13px; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .card-title { flex: 1; }
+  .card-title h3 { font-size: 15px; font-weight: 600; color: #fff; }
+  .card-title .card-meta { font-size: 12px; color: #666; margin-top: 2px; }
+  .card-title .card-meta a { color: #60a5fa; text-decoration: none; }
+  .card-title .card-meta a:hover { text-decoration: underline; }
+  .score-ring { text-align: center; flex-shrink: 0; }
+  .score-ring .score-num { font-size: 22px; font-weight: 700; }
+  .score-ring .score-label { font-size: 10px; color: #666; }
+  .chevron { color: #555; font-size: 18px; transition: transform 0.2s; flex-shrink: 0; }
+  .chevron.open { transform: rotate(180deg); }
+
+  .card-body { display: none; padding: 0 20px 20px; border-top: 1px solid #2a2a3a; }
+  .card-body.open { display: block; }
+
+  .section { margin-top: 16px; }
+  .section-title { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: #555; margin-bottom: 8px; }
+
+  .profile-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .profile-item { background: #13131c; border-radius: 8px; padding: 12px; }
+  .profile-item .label { font-size: 11px; color: #555; margin-bottom: 4px; }
+  .profile-item .value { font-size: 13px; color: #ccc; line-height: 1.5; }
+  .tag { display: inline-block; background: #2a2a3a; border-radius: 4px; padding: 2px 8px; font-size: 12px; color: #aaa; margin: 2px; }
+
+  .score-bars { display: flex; flex-direction: column; gap: 8px; }
+  .score-bar-row { display: flex; align-items: center; gap: 10px; }
+  .score-bar-label { font-size: 12px; color: #888; width: 130px; flex-shrink: 0; }
+  .score-bar-track { flex: 1; height: 6px; background: #2a2a3a; border-radius: 3px; overflow: hidden; }
+  .score-bar-fill { height: 100%; border-radius: 3px; background: #7c3aed; transition: width 0.6s ease; }
+  .score-bar-val { font-size: 12px; color: #aaa; width: 20px; text-align: right; flex-shrink: 0; }
+
+  .email-box { background: #13131c; border-radius: 8px; padding: 16px; }
+  .email-subject { font-size: 13px; font-weight: 600; color: #a78bfa; margin-bottom: 10px; }
+  .email-body { font-size: 13px; color: #ccc; line-height: 1.7; white-space: pre-wrap; }
+  .email-hook { margin-top: 10px; font-size: 11px; color: #555; }
+  .email-hook span { color: #7c3aed; }
+
+  .confidence-badge { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 4px; }
+  .confidence-high { background: #1a3a2a; color: #34d399; }
+  .confidence-medium { background: #3a3a1a; color: #fbbf24; }
+  .confidence-low { background: #3a1a1a; color: #f87171; }
+
+  .summary-bar {
+    background: #1a1a24; border: 1px solid #2a2a3a; border-radius: 12px;
+    padding: 20px 24px; margin-bottom: 28px; display: flex; gap: 32px;
+  }
+  .summary-stat .label { font-size: 11px; color: #555; margin-bottom: 4px; }
+  .summary-stat .value { font-size: 22px; font-weight: 700; color: #fff; }
+  .summary-stat .value.purple { color: #a78bfa; }
+</style>
+</head>
+<body>
+
+<header>
+  <div style="width:32px;height:32px;background:#7c3aed;border-radius:8px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:16px;">S</div>
+  <h1>Sparkit BD Agent</h1>
+  <span class="badge">AI-powered outreach</span>
+</header>
+
+<div class="main">
+  <div class="search-box">
+    <input type="text" id="briefInput" placeholder="e.g. Find sustainable fashion PR agencies in London working with emerging brands"
+      value="Find sustainable fashion PR agencies in London working with emerging brands" />
+    <button id="runBtn" onclick="runPipeline()">Run Pipeline</button>
+  </div>
+
+  <div id="log"></div>
+  <div id="results"></div>
+</div>
+
+<script>
+const log = document.getElementById('log');
+const results = document.getElementById('results');
+const runBtn = document.getElementById('runBtn');
+
+function scoreColor(s) {
+  if (s >= 4.5) return '#4ade80';
+  if (s >= 3.5) return '#a3e635';
+  if (s >= 2.5) return '#fbbf24';
+  if (s >= 1.5) return '#fb923c';
+  return '#f87171';
+}
+
+function addLog(iconClass, iconChar, html, details = null) {
+  const el = document.createElement('div');
+  el.className = 'log-entry';
+
+  let detailsHtml = '';
+  if (details && details.length > 0) {
+    const detailsId = 'details-' + Date.now() + Math.random();
+    const detailsContent = details.map(d => `<div class="log-details-item">${d}</div>`).join('');
+    detailsHtml = `
+      <span class="log-toggle" onclick="toggleDetails('${detailsId}')">展开详情 ▾</span>
+      <div id="${detailsId}" class="log-details" style="display:none">${detailsContent}</div>
+    `;
+  }
+
+  el.innerHTML = `
+    <div class="log-icon ${iconClass}">${iconChar}</div>
+    <div class="log-text">${html}${detailsHtml}</div>
+  `;
+  log.appendChild(el);
+  el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function toggleDetails(id) {
+  const el = document.getElementById(id);
+  const toggle = el.previousElementSibling;
+  if (el.style.display === 'none') {
+    el.style.display = 'block';
+    toggle.innerHTML = '收起详情 ▴';
+  } else {
+    el.style.display = 'none';
+    toggle.innerHTML = '展开详情 ▾';
+  }
+}
+
+function runPipeline() {
+  const brief = document.getElementById('briefInput').value.trim();
+  if (!brief) return;
+
+  log.innerHTML = '';
+  results.innerHTML = '';
+  results.style.display = 'none';
+  runBtn.disabled = true;
+  runBtn.innerHTML = '<span class="spinner"></span>Running...';
+
+  const url = `/run?brief=${encodeURIComponent(brief)}&n_targets=5`;
+  const es = new EventSource(url);
+
+  es.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    const type = msg.event;
+    const data = msg.data;
+
+    if (type === 'searching') {
+      addLog('search', '⌕', `<strong>Searching</strong> — ${data.brief}`);
+    }
+    else if (type === 'search_done') {
+      const links = data.candidates.map(c =>
+        `<a href="${c.url}" target="_blank">${c.title || c.url}</a>`
+      ).join(' &nbsp;·&nbsp; ');
+      addLog('search', '⌕', `Found <strong>${data.count}</strong> candidates &nbsp;·&nbsp; ${links}`);
+    }
+    else if (type === 'researching') {
+      addLog('research', '↗', `Researching <strong>${data.index}</strong>: <a href="${data.url}" target="_blank">${data.title}</a>`);
+    }
+    else if (type === 'research_done') {
+      const steps = data.steps || [];
+      addLog('research', '↗',
+        `<strong>${data.name}</strong> &nbsp;
+         <a href="${data.url}" target="_blank">↗ source</a>`,
+        steps
+      );
+    }
+    else if (type === 'scoring') {
+      addLog('score', '★', `Scoring <strong>${data.name}</strong>…`);
+    }
+    else if (type === 'score_done') {
+      const s = data.score;
+      const reasoning = data.reasoning_steps || [];
+      const reasoningDetails = reasoning.map(r =>
+        `<strong>${r.dimension}:</strong> ${r.score}/5 - ${r.reasoning}`
+      );
+      addLog('score', '★',
+        `<strong>${data.name}</strong>
+         <span class="score-badge" style="color:${scoreColor(s)}">${s}/5</span>`,
+        reasoningDetails
+      );
+    }
+    else if (type === 'emailing') {
+      addLog('email', '✉', `Drafting email for <strong>${data.name}</strong>…`);
+    }
+    else if (type === 'email_done') {
+      addLog('email', '✉',
+        `<strong>${data.name}</strong> — "${data.subject}" <span style="color:#555">(${data.word_count} words)</span>`
+      );
+    }
+    else if (type === 'error') {
+      addLog('skip', '✕', `<span style="color:#f87171">Error: ${data.message}</span>`);
+      es.close();
+      runBtn.disabled = false;
+      runBtn.textContent = 'Run Pipeline';
+    }
+    else if (type === 'done') {
+      addLog('done', '✓', `<strong>Done</strong> — saved to <code>${data.saved_to}</code>`);
+      es.close();
+      runBtn.disabled = false;
+      runBtn.textContent = 'Run Pipeline';
+      renderResults(data.result);
+    }
+  };
+
+  es.onerror = () => {
+    es.close();
+    runBtn.disabled = false;
+    runBtn.textContent = 'Run Pipeline';
+  };
+}
+
+function renderResults(data) {
+  results.style.display = 'block';
+  const avg = data.summary.avg_score;
+  results.innerHTML = `
+    <h2>Pipeline Results</h2>
+    <div class="summary-bar">
+      <div class="summary-stat"><div class="label">Targets found</div><div class="value">${data.summary.total_targets}</div></div>
+      <div class="summary-stat"><div class="label">Avg fit score</div><div class="value purple">${avg}/5</div></div>
+      <div class="summary-stat"><div class="label">Top target</div><div class="value" style="font-size:16px">${data.summary.top_target}</div></div>
+    </div>
+    ${data.targets.map(t => renderCard(t)).join('')}
+  `;
+  results.scrollIntoView({ behavior: 'smooth' });
+}
+
+function renderCard(t) {
+  const p = t.profile;
+  const s = t.scoring;
+  const e = t.outreach;
+  const sc = scoreColor(s.score);
+
+  const clients = (p.clients || []).map(c => `<span class="tag">${c}</span>`).join('') || '<span style="color:#555">—</span>';
+  const recentWork = (p.recent_work || []).map(r => {
+    if (typeof r === 'object' && r !== null) {
+      return r.url
+        ? `<li><a href="${r.url}" target="_blank">${r.text}</a></li>`
+        : `<li>${r.text}</li>`;
+    }
+    return `<li>${r}</li>`;
+  }).join('') || '<li style="color:#555">—</li>';
+  const contacts = (p.contacts || []).map(c => `<span class="tag">${c.name}${c.role ? ' · ' + c.role : ''}</span>`).join('') || '<span style="color:#555">—</span>';
+
+  return `
+  <div class="target-card">
+    <div class="card-header" onclick="toggleCard(this)">
+      <div class="rank">${t.rank}</div>
+      <div class="card-title">
+        <h3>${p.name || '—'}</h3>
+        <div class="card-meta">
+          <a href="${p.source_url}" target="_blank">${p.source_url}</a>
+          &nbsp;·&nbsp;
+          <span class="confidence-badge confidence-${p.confidence}">${p.confidence}</span>
+        </div>
+      </div>
+      <div class="score-ring">
+        <div class="score-num" style="color:${sc}">${s.score}</div>
+        <div class="score-label">/ 5</div>
+      </div>
+      <div class="chevron">▾</div>
+    </div>
+    <div class="card-body">
+
+      <div class="section">
+        <div class="section-title">Company Profile</div>
+        <div class="profile-grid">
+          <div class="profile-item" style="grid-column:1/-1">
+            <div class="label">What they do</div>
+            <div class="value">${p.what_they_do || p.positioning || '—'}</div>
+          </div>
+          <div class="profile-item">
+            <div class="label">Notable clients</div>
+            <div class="value">${clients}</div>
+          </div>
+          <div class="profile-item">
+            <div class="label">Key contacts</div>
+            <div class="value">${contacts}</div>
+          </div>
+          <div class="profile-item" style="grid-column:1/-1">
+            <div class="label">Recent work</div>
+            <div class="value"><ul style="padding-left:16px">${recentWork}</ul></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">Fit Score — ${s.score}/5</div>
+        <div class="score-bars">
+          <div class="score-bar-row">
+            <div class="score-bar-label">Fashion Tech Fit</div>
+            <div class="score-bar-track"><div class="score-bar-fill" style="width:${s.fashion_tech_fit*20}%"></div></div>
+            <div class="score-bar-val">${s.fashion_tech_fit}</div>
+          </div>
+          <div class="score-bar-row">
+            <div class="score-bar-label">Creator Fit</div>
+            <div class="score-bar-track"><div class="score-bar-fill" style="width:${s.creator_fit*20}%"></div></div>
+            <div class="score-bar-val">${s.creator_fit}</div>
+          </div>
+          <div class="score-bar-row">
+            <div class="score-bar-label">Sustainability Fit</div>
+            <div class="score-bar-track"><div class="score-bar-fill" style="width:${s.sustainability_fit*20}%"></div></div>
+            <div class="score-bar-val">${s.sustainability_fit}</div>
+          </div>
+        </div>
+        ${(s.reasoning_steps || []).map(r => `
+          <div style="margin-top:12px;padding:10px;background:#13131c;border-radius:6px;">
+            <div style="font-size:12px;font-weight:600;color:#a78bfa;margin-bottom:4px;">${r.dimension}: ${r.score}/5</div>
+            <div style="font-size:12px;color:#aaa;line-height:1.6;">${r.reasoning}</div>
+          </div>
+        `).join('')}
+        <div style="margin-top:10px;font-size:13px;color:#888">${s.rationale}</div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">Outreach Email</div>
+        <div class="email-box">
+          <div class="email-subject">Subject: ${e.subject}</div>
+          <div class="email-body">${e.body}</div>
+          ${e.hook_fact ? `<div class="email-hook">Hook source: <span>${e.hook_fact}</span></div>` : ''}
+        </div>
+      </div>
+
+    </div>
+  </div>`;
+}
+
+function toggleCard(header) {
+  const body = header.nextElementSibling;
+  const chevron = header.querySelector('.chevron');
+  body.classList.toggle('open');
+  chevron.classList.toggle('open');
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>BD Pipeline</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f5; padding: 20px; }
+    .container { max-width: 1000px; margin: 0 auto; }
+    h1 { margin-bottom: 20px; font-size: 24px; }
+    .search { display: flex; gap: 10px; margin-bottom: 30px; }
+    input { flex: 1; padding: 10px; border: 1px solid #ddd; border-radius: 4px; }
+    button { padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
+    button:disabled { background: #ccc; }
+
+    #progress { display: none; margin-bottom: 20px; background: white; padding: 15px; border-radius: 4px; }
+    .progress-bar { background: #f0f0f0; height: 20px; border-radius: 3px; overflow: hidden; margin-bottom: 10px; }
+    .progress-fill { background: #007bff; height: 100%; width: 0%; transition: width 0.3s; }
+    #status { font-size: 14px; color: #666; margin-bottom: 10px; }
+    #log { font-size: 12px; color: #999; max-height: 250px; overflow-y: auto; line-height: 1.6; }
+    .log-item { padding: 5px 0; border-bottom: 1px solid #f0f0f0; }
+    .log-details { margin-left: 20px; padding: 5px 10px; background: #f9f9f9; border-radius: 3px; margin-top: 3px; font-size: 11px; color: #666; }
+    .log-toggle { color: #007bff; cursor: pointer; margin-left: 5px; font-size: 11px; }
+
+    #results { display: none; }
+    .summary { background: white; padding: 15px; border-radius: 4px; margin-bottom: 20px; }
+    .summary-stat { margin-bottom: 10px; }
+    .stat-label { font-size: 12px; color: #666; }
+    .stat-value { font-size: 20px; font-weight: bold; color: #007bff; }
+
+    .target { background: white; padding: 15px; margin-bottom: 15px; border-radius: 4px; border-left: 4px solid #007bff; }
+    .target-header { display: flex; justify-content: space-between; align-items: center; cursor: pointer; padding: 5px; margin: -5px; border-radius: 4px; }
+    .target-header:hover { background: #f9f9f9; }
+    .target-name { font-weight: bold; font-size: 16px; flex: 1; }
+    .target-score { font-size: 18px; font-weight: bold; color: #007bff; margin-right: 10px; }
+    .target-toggle { color: #666; font-size: 14px; }
+    .target-details { display: none; margin-top: 15px; padding-top: 15px; border-top: 1px solid #f0f0f0; }
+    .target-details.open { display: block; }
+
+    .detail-section { margin-bottom: 15px; }
+    .detail-title { font-weight: bold; font-size: 13px; color: #333; margin-bottom: 5px; }
+    .detail-content { font-size: 13px; color: #555; line-height: 1.6; }
+    .detail-content a { color: #007bff; text-decoration: none; }
+    .detail-content a:hover { text-decoration: underline; }
+
+    .score-breakdown { background: #f9f9f9; padding: 10px; border-radius: 3px; margin-bottom: 10px; }
+    .score-item { font-size: 12px; margin-bottom: 5px; }
+    .score-item strong { color: #007bff; }
+
+    .email-box { background: #f9f9f9; padding: 12px; border-radius: 3px; }
+    .email-subject { font-weight: bold; color: #333; margin-bottom: 8px; }
+    .email-body { font-size: 13px; color: #555; white-space: pre-wrap; line-height: 1.6; }
+  </style>
+</head>
+<body>
+
+<div class="container">
+  <h1>BD Outreach Pipeline</h1>
+
+  <div class="search">
+    <input type="text" id="brief" value="Find sustainable fashion PR agencies in London working with emerging brands" />
+    <button id="btn" onclick="run()">Run</button>
+  </div>
+
+  <div id="progress">
+    <div id="status">Preparing...</div>
+    <div class="progress-bar">
+      <div id="progressBar" class="progress-fill"></div>
+    </div>
+    <div id="log"></div>
+  </div>
+
+  <div id="results">
+    <div class="summary">
+      <div class="summary-stat">
+        <div class="stat-label">Targets Found</div>
+        <div class="stat-value" id="total">0</div>
+      </div>
+      <div class="summary-stat">
+        <div class="stat-label">Top Target</div>
+        <div class="stat-value" id="top" style="font-size: 14px;">—</div>
+      </div>
+    </div>
+    <div id="targets"></div>
+  </div>
+</div>
+
+<script>
+let totalCandidates = 0;
+let processedCount = 0;
+
+function addLog(msg, details = null) {
+  const log = document.getElementById('log');
+  const item = document.createElement('div');
+  item.className = 'log-item';
+
+  if (details && details.length > 0) {
+    const id = 'details-' + Date.now() + Math.random();
+    item.innerHTML = msg + ` <span class="log-toggle" onclick="toggleDetails('${id}')">expand</span>
+      <div id="${id}" class="log-details" style="display:none">${details.map(d => `<div>${d}</div>`).join('')}</div>`;
+  } else {
+    item.textContent = msg;
+  }
+
+  log.appendChild(item);
+  log.scrollTop = log.scrollHeight;
+}
+
+function toggleDetails(id) {
+  const el = document.getElementById(id);
+  const toggle = el.previousElementSibling;
+  if (el.style.display === 'none') {
+    el.style.display = 'block';
+    toggle.textContent = 'collapse';
+  } else {
+    el.style.display = 'none';
+    toggle.textContent = 'expand';
+  }
+}
+
+function updateProgress() {
+  const pct = totalCandidates > 0 ? Math.round((processedCount / totalCandidates) * 100) : 0;
+  document.getElementById('progressBar').style.width = pct + '%';
+}
+
+function run() {
+  const brief = document.getElementById('brief').value;
+  const btn = document.getElementById('btn');
+  btn.disabled = true;
+  btn.textContent = 'Running...';
+
+  document.getElementById('progress').style.display = 'block';
+  document.getElementById('results').style.display = 'none';
+  document.getElementById('log').innerHTML = '';
+  totalCandidates = 0;
+  processedCount = 0;
+
+  const es = new EventSource(`/run?brief=${encodeURIComponent(brief)}&n=5`);
+
+  es.onmessage = (e) => {
+    try {
+      const msg = JSON.parse(e.data);
+      const event = msg.event;
+      const data = msg.data;
+
+      if (event === 'searching') {
+        document.getElementById('status').textContent = 'Searching...';
+        addLog('Starting search');
+      }
+      else if (event === 'search_done') {
+        totalCandidates = data.count;
+        document.getElementById('status').textContent = `Found ${data.count} candidates`;
+        addLog(`Found ${data.count} candidates`);
+        updateProgress();
+      }
+      else if (event === 'researching') {
+        processedCount++;
+        document.getElementById('status').textContent = `Researching (${processedCount}/${totalCandidates}): ${data.title}`;
+        addLog(`Researching: ${data.title}`);
+        updateProgress();
+      }
+      else if (event === 'research_done') {
+        addLog(`Extracted: ${data.name}`, data.steps || []);
+      }
+      else if (event === 'research_skipped') {
+        addLog(`Skipped: ${data.reason}`, data.steps || []);
+      }
+      else if (event === 'scoring') {
+        document.getElementById('status').textContent = `Scoring: ${data.name}`;
+        addLog(`Scoring: ${data.name}`);
+      }
+      else if (event === 'score_done') {
+        const reasoning = (data.reasoning_steps || []).map(r => `${r.dimension}: ${r.score}/5 - ${r.reasoning}`);
+        addLog(`Score: ${data.score}/5`, reasoning);
+      }
+      else if (event === 'emailing') {
+        document.getElementById('status').textContent = `Drafting email: ${data.name}`;
+        addLog(`Drafting email: ${data.name}`);
+      }
+      else if (event === 'email_done') {
+        addLog(`Email ready: "${data.subject}"`);
+      }
+      else if (event === 'done') {
+        es.close();
+        btn.disabled = false;
+        btn.textContent = 'Run';
+        document.getElementById('status').textContent = 'Complete';
+        addLog('Pipeline complete');
+        document.getElementById('progress').style.display = 'none';
+        showResults(data.result);
+      }
+      else if (event === 'error') {
+        addLog(`Error: ${data.message}`);
+      }
+    } catch (err) {
+      console.error('Parse error:', err);
+    }
+  };
+
+  es.onerror = () => {
+    es.close();
+    btn.disabled = false;
+    btn.textContent = 'Run';
+    addLog('Connection closed');
+  };
+}
+
+function showResults(data) {
+  document.getElementById('total').textContent = data.summary.total_targets;
+  document.getElementById('top').textContent = data.summary.top_target || '—';
+
+  const html = data.targets.map(t => {
+    const p = t.profile;
+    const s = t.scoring;
+    const e = t.outreach;
+
+    let detailsHtml = '';
+    if (p.what_they_do) detailsHtml += `<div class="detail-section"><div class="detail-title">What They Do</div><div class="detail-content">${p.what_they_do}</div></div>`;
+    if (p.clients && p.clients.length) detailsHtml += `<div class="detail-section"><div class="detail-title">Notable Clients</div><div class="detail-content">${p.clients.join(', ')}</div></div>`;
+    if (p.recent_work && p.recent_work.length) {
+      const works = p.recent_work.map(r => typeof r === 'object' && r.url ? `<a href="${r.url}" target="_blank">${r.text}</a>` : (typeof r === 'object' ? r.text : r)).join(', ');
+      detailsHtml += `<div class="detail-section"><div class="detail-title">Recent Work</div><div class="detail-content">${works}</div></div>`;
+    }
+    if (p.contacts && p.contacts.length) {
+      const contacts = p.contacts.map(c => `${c.name}${c.role ? ' (' + c.role + ')' : ''}`).join(', ');
+      detailsHtml += `<div class="detail-section"><div class="detail-title">Key Contacts</div><div class="detail-content">${contacts}</div></div>`;
+    }
+
+    detailsHtml += `<div class="detail-section"><div class="detail-title">Fit Score</div><div class="score-breakdown">
+      ${(s.reasoning_steps || []).map(r => `<div class="score-item"><strong>${r.dimension}:</strong> ${r.score}/5 - ${r.reasoning}</div>`).join('')}
+    </div></div>`;
+
+    detailsHtml += `<div class="detail-section"><div class="detail-title">Outreach Email</div><div class="email-box">
+      <div class="email-subject">Subject: ${e.subject}</div>
+      <div class="email-body">${e.body}</div>
+      ${e.contact_url ? `<div style="margin-top:8px;font-size:12px;"><a href="${e.contact_url}" target="_blank">Contact form</a></div>` : ''}
+    </div></div>`;
+
+    return `
+    <div class="target">
+      <div class="target-header" onclick="toggleTarget(this)">
+        <div class="target-name">${p.name}</div>
+        <div class="target-score">${s.score}/5</div>
+        <div class="target-toggle">▾</div>
+      </div>
+      <div class="target-details">
+        <div class="detail-section">
+          <div class="detail-title">Website</div>
+          <div class="detail-content"><a href="${p.source_url}" target="_blank">${p.source_url}</a></div>
+        </div>
+        ${detailsHtml}
+      </div>
+    </div>`;
+  }).join('');
+
+  document.getElementById('targets').innerHTML = html;
+  document.getElementById('results').style.display = 'block';
+}
+
+function toggleTarget(header) {
+  const details = header.nextElementSibling;
+  const toggle = header.querySelector('.target-toggle');
+  details.classList.toggle('open');
+  toggle.textContent = details.classList.contains('open') ? '▴' : '▾';
+}
+</script>
+
+</body>
+</html>
