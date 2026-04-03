@@ -171,7 +171,7 @@ function addLog(iconClass, iconChar, html, details = null) {
     const detailsId = 'details-' + Date.now() + Math.random();
     const detailsContent = details.map(d => `<div class="log-details-item">${d}</div>`).join('');
     detailsHtml = `
-      <span class="log-toggle" onclick="toggleDetails('${detailsId}')">展开详情 ▾</span>
+      <span class="log-toggle" onclick="toggleDetails('${detailsId}')">Show details ▾</span>
       <div id="${detailsId}" class="log-details" style="display:none">${detailsContent}</div>
     `;
   }
@@ -189,10 +189,10 @@ function toggleDetails(id) {
   const toggle = el.previousElementSibling;
   if (el.style.display === 'none') {
     el.style.display = 'block';
-    toggle.innerHTML = '收起详情 ▴';
+    toggle.innerHTML = 'Hide details ▴';
   } else {
     el.style.display = 'none';
-    toggle.innerHTML = '展开详情 ▾';
+    toggle.innerHTML = 'Show details ▾';
   }
 }
 

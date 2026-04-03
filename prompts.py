@@ -1,50 +1,66 @@
 from config import SPARKIT_CONTEXT
 
-RESEARCH_PROMPT = """You are an information extraction assistant. Below is the raw content scraped from {url}.
+RESEARCH_PROMPT = """Extract company information from this webpage. Return ONLY valid JSON.
 
----
-{raw_content}
----
+URL: {url}
 
-Based ONLY on the content above, extract the following fields. If a field is not mentioned, return null. Do NOT guess or invent information.
+Content:
+{source_text}
 
-Return a JSON object with these exact keys:
-- name: company name (string or null)
-- what_they_do: what they do, 2-3 sentences (string or null)
-- clients: list of client/brand names mentioned (array of strings, max 5)
-- contacts: list of people with roles visible on the page (array of {{"name": string, "role": string}}, max 3)
-- recent_work: recent campaigns, projects, or press mentions (array of {{"text": string, "url": string or null}}, max 3) — include the URL if a link was visible in the content, otherwise null
-- positioning: their specialty or niche in 1-2 sentences (string or null)
+CRITICAL RULES:
+1. Extract ONLY factual information visible in the content. Do NOT invent or guess.
+2. PRIORITY: Extract ALL email addresses and phone numbers found. Email is most important.
+3. If this is a LIST PAGE (directory, top 10, etc), extract the FIRST agency's info and provide its URL in "real_agency_url".
 
-Return only valid JSON, no markdown, no explanation."""
+Return JSON:
+{{
+  "name": "exact company name from page",
+  "what_they_do": "2-3 sentences describing their work",
+  "positioning": "their specialty/niche in 1-2 sentences",
+  "clients": ["actual client names mentioned"],
+  "recent_work": [{{"text": "specific project/campaign", "url": "link if available"}}],
+  "contacts": [{{"name": "person name or 'General'", "role": "their role if visible", "email": "ALL emails found - separate multiple with semicolon", "phone": "ALL phone numbers found - separate multiple with semicolon"}}],
+  "team_size": "number or description if mentioned",
+  "real_agency_url": "if list page, first agency's website URL"
+}}
 
-SCORE_PROMPT = """You are evaluating potential partners for Sparkit, a fashion-tech platform for independent creators.
+Return ONLY JSON, no markdown."""
+
+SCORE_PROMPT = """Score this company for fit with Sparkit.
 
 Sparkit context:
 {sparkit_context}
 
-Target company profile:
+Company profile:
 {profile}
 
-Score this company on each dimension from 1 (poor fit) to 5 (excellent fit):
-- fashion_tech_fit: How relevant are they to fashion technology and innovation?
-- creator_fit: How aligned are they with independent/emerging creators?
-- sustainability_fit: How committed are they to sustainability?
+CRITICAL: Base scores ONLY on factual evidence in the profile. Cite specific facts.
+
+Score on 3 dimensions (1-5 scale):
+1. fashion_tech_fit: Evidence of fashion-tech/digital innovation work
+2. creator_fit: Evidence of working with independent/emerging creators
+3. sustainability_fit: Evidence of sustainability/ethical production focus
 
 Scoring guide:
-- 5: Direct, explicit evidence in the profile
-- 4: Strong indirect signals
-- 3: Adjacent or partial alignment
-- 2: Weak signals only
-- 1: No meaningful alignment
+- 5: Multiple explicit examples with names/details
+- 4: Clear evidence with at least one specific example
+- 3: Indirect signals or adjacent work
+- 2: Weak/generic signals only
+- 1: No evidence
 
-Return a JSON object with:
-- fashion_tech_fit: integer 1-5
-- creator_fit: integer 1-5
-- sustainability_fit: integer 1-5
-- rationale: one sentence referencing a specific fact from the profile
+Return JSON with SPECIFIC reasoning citing facts:
+{{
+  "fashion_tech_fit": 1-5,
+  "fashion_tech_reasoning": "cite specific client/project/positioning from profile",
+  "creator_fit": 1-5,
+  "creator_reasoning": "cite specific evidence",
+  "sustainability_fit": 1-5,
+  "sustainability_reasoning": "cite specific evidence",
+  "rationale": "overall summary with key hook fact"
+}}
 
-Return only valid JSON, no markdown."""
+Return ONLY JSON, no markdown."""
+
 EMAIL_PROMPT = """You are writing a cold outreach email on behalf of Sparkit to a potential partner.
 
 Sparkit context:
@@ -53,22 +69,30 @@ Sparkit context:
 Target company profile:
 {profile}
 
-Rules:
-1. Keep the entire email under 500 words. (Subject line + body)
-2. Open with ONE specific hook that references a real fact from their profile (a client, campaign, value, or specialty). This hook must be a direct observation, not generic praise.
-3. Immediately after the hook, state how Sparkit helps them achieve a relevant goal or solve a pain point. Use their language, not our features.
-4. Limit Sparkit’s self-description to one concise sentence that ties back to their world.
-5. End with a low‑friction CTA that explicitly suggests a specific, short next step (e.g., “Would a quick 15‑minute call next week work?”).
-6. Write in a conversational, friendly tone — avoid bullet points, jargon, or corporate phrases.
-7. Do NOT use placeholders like [Name]. Use the actual company name.
-8. Return only a valid JSON object with exactly three fields: "subject", "body", "hook_fact". No markdown, no extra text.
+Scoring insight: {rationale}
 
-Example structure (do not copy content):
-{
-  "subject": "Short, specific subject line",
+Rules:
+1. PURPOSE: This is an initial partnership inquiry, not a sales pitch
+2. Keep the entire email under 500 words (subject + body)
+3. Open with ONE specific hook that references a real fact from their profile (a client, campaign, value, or specialty)
+4. Immediately after the hook, explain why Sparkit + their expertise = mutual value
+5. Limit Sparkit's self-description to one concise sentence
+6. End with: "Would a 15-minute call next week work?"
+7. Write in conversational, friendly tone — avoid jargon or corporate phrases
+8. Do NOT use placeholders like [Name]. Use the actual company name.
+
+Subject line rules:
+- Start with action verb: "Partnership", "Collaboration", "Let's work together"
+- Reference both parties' core business
+- Under 8 words
+- Example: "Partnership: Indie designers + your PR expertise"
+
+Return only valid JSON with exactly three fields: "subject", "body", "hook_fact". No markdown, no extra text.
+
+Example:
+{{
+  "subject": "Partnership: Indie designers + your PR expertise",
   "body": "Hook sentence. Transition showing mutual benefit. One line about Sparkit. Call to action.",
   "hook_fact": "The specific fact you used from their profile"
-}
-
-Make sure the body is plain text (no markdown) and does not contain any stray text like "Contact form".
+}}
 """

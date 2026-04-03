@@ -146,35 +146,46 @@ function run() {
         document.getElementById('status').textContent = 'Searching...';
         addLog('Starting search');
       }
+      else if (event === 'search_step') {
+        addLog(`  → ${data.step}`);
+      }
+      else if (event === 'search_error') {
+        addLog(`Search error: ${data.message}`);
+      }
       else if (event === 'search_done') {
         totalCandidates = data.count;
         document.getElementById('status').textContent = `Found ${data.count} candidates`;
         addLog(`Found ${data.count} candidates`);
+        if (data.candidates && data.candidates.length) {
+          data.candidates.forEach((c, i) => {
+            addLog(`  ${i + 1}. ${c.title}`);
+          });
+        }
         updateProgress();
       }
-      else if (event === 'researching') {
-        processedCount++;
-        document.getElementById('status').textContent = `Researching (${processedCount}/${totalCandidates}): ${data.title}`;
-        addLog(`Researching: ${data.title}`);
-        updateProgress();
+      else if (event === 'research_step') {
+        addLog(`  → ${data.step}`);
+      }
+      else if (event === 'scoring_step') {
+        addLog(`  → ${data.step}`);
+      }
+      else if (event === 'email_step') {
+        addLog(`  → ${data.step}`);
       }
       else if (event === 'research_done') {
         addLog(`Extracted: ${data.name}`, data.steps || []);
       }
       else if (event === 'research_skipped') {
-        addLog(`Skipped: ${data.reason}`, data.steps || []);
-      }
-      else if (event === 'scoring') {
-        document.getElementById('status').textContent = `Scoring: ${data.name}`;
-        addLog(`Scoring: ${data.name}`);
+        const detail = [];
+        if (data.url) detail.push(`URL: ${data.url}`);
+        addLog(`Skipped: ${data.reason}`, detail.concat(data.steps || []));
+        processedCount += 1;
+        updateProgress();
       }
       else if (event === 'score_done') {
         const reasoning = (data.reasoning_steps || []).map(r => `${r.dimension}: ${r.score}/5 - ${r.reasoning}`);
+        if (data.rationale) reasoning.push(`Overall: ${data.rationale}`);
         addLog(`Score: ${data.score}/5`, reasoning);
-      }
-      else if (event === 'emailing') {
-        document.getElementById('status').textContent = `Drafting email: ${data.name}`;
-        addLog(`Drafting email: ${data.name}`);
       }
       else if (event === 'email_done') {
         addLog(`Email ready: "${data.subject}"`);
@@ -185,7 +196,11 @@ function run() {
         btn.textContent = 'Run';
         document.getElementById('status').textContent = 'Complete';
         addLog('Pipeline complete');
-        document.getElementById('progress').style.display = 'none';
+        document.getElementById('progress').style.display = 'block';
+        document.getElementById('progress').style.maxHeight = '300px';
+        document.getElementById('progress').style.overflow = 'auto';
+        document.getElementById('progress').style.borderTop = '2px solid #ddd';
+        document.getElementById('progress').style.marginTop = '20px';
         showResults(data.result);
       }
       else if (event === 'error') {
@@ -221,7 +236,16 @@ function showResults(data) {
       detailsHtml += `<div class="detail-section"><div class="detail-title">Recent Work</div><div class="detail-content">${works}</div></div>`;
     }
     if (p.contacts && p.contacts.length) {
-      const contacts = p.contacts.map(c => `${c.name}${c.role ? ' (' + c.role + ')' : ''}`).join(', ');
+      const contacts = p.contacts.map(c => {
+        let contact = `${c.name}${c.role ? ' (' + c.role + ')' : ''}`;
+        if (c.email || c.phone) {
+          contact += ' - ';
+          if (c.email) contact += `<a href="mailto:${c.email}">${c.email}</a>`;
+          if (c.email && c.phone) contact += ' | ';
+          if (c.phone) contact += c.phone;
+        }
+        return contact;
+      }).join(', ');
       detailsHtml += `<div class="detail-section"><div class="detail-title">Key Contacts</div><div class="detail-content">${contacts}</div></div>`;
     }
 
@@ -230,9 +254,10 @@ function showResults(data) {
     </div></div>`;
 
     detailsHtml += `<div class="detail-section"><div class="detail-title">Outreach Email</div><div class="email-box">
+      ${e.contact_email ? `<div style="margin-bottom:10px;padding:8px;background:#e8f4f8;border-radius:4px;"><strong>Email:</strong> <a href="mailto:${e.contact_email}">${e.contact_email}</a></div>` : ''}
       <div class="email-subject">Subject: ${e.subject}</div>
       <div class="email-body">${e.body}</div>
-      ${e.contact_url ? `<div style="margin-top:8px;font-size:12px;"><a href="${e.contact_url}" target="_blank">Contact form</a></div>` : ''}
+      ${!e.contact_email && e.contact_url ? `<div style="margin-top:8px;font-size:12px;"><a href="${e.contact_url}" target="_blank">Contact form</a></div>` : ''}
     </div></div>`;
 
     return `
