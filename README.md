@@ -144,7 +144,44 @@ TAVILY_API_KEY=your_tavily_api_key
 python server.py
 ```
 
-Visit: `http://localhost:8000/static/simple.html`
+Visit: `http://localhost:8000/`
+
+## Deployment (Public URL)
+
+`localhost` only works on your own machine. To let others access the frontend, deploy this app to a cloud service and share the generated URL.
+
+### Option A: Railway
+1. Push this repo to GitHub.
+2. In Railway, create a new project from your GitHub repo.
+3. Set environment variables in Railway:
+   - `OPENAI_API_KEY`
+   - `OPENAI_BASE_URL`
+   - `CHAT_MODEL`
+   - `TAVILY_API_KEY`
+4. Set start command:
+   ```bash
+   python server.py
+   ```
+5. Deploy, then open the Railway domain (frontend is at `/`).
+
+### Option B: Render
+1. Push this repo to GitHub.
+2. Create a new **Web Service** on Render from this repo.
+3. Build command:
+   ```bash
+   pip install -r requirements.txt
+   ```
+4. Start command:
+   ```bash
+   python server.py
+   ```
+5. Add the same environment variables as above.
+6. Deploy and share the Render URL.
+
+### Notes
+- The frontend entry point is `GET /` (served by `static/index.html`).
+- Live pipeline execution requires valid API keys on the deployed environment.
+- If you only need a short demo, use a tunnel tool (for example ngrok) on local port `8000`.
 
 ## Customization
 
