@@ -55,12 +55,7 @@ def test_prepare_candidate_node_end_of_list():
     assert result["events"] == []
 
 
-def test_research_candidate_node_directory_skip(monkeypatch):
-    def fake_fetch_page(url):
-        return "<html></html>", "", ["fetched list"]
-
-    monkeypatch.setattr(bd_agent, "fetch_page", fake_fetch_page)
-
+def test_research_candidate_node_directory_skip():
     result = asyncio.run(
         bd_agent.research_candidate_node(
             {
@@ -82,6 +77,7 @@ def test_research_candidate_node_directory_skip(monkeypatch):
     event_names = [e["event"] for e in result["events"]]
     assert result["skip_current"] is True
     assert "directory_detected" in event_names
+    assert "research_skipped" in event_names
 
 
 def test_research_candidate_node_valid_profile(monkeypatch):
@@ -116,12 +112,6 @@ def test_research_candidate_node_valid_profile(monkeypatch):
 
 
 def test_research_candidate_node_directory_expands_entities(monkeypatch):
-    def fake_fetch_page(url):
-        html = '<a href="https://alpha.edu">Alpha School</a><a href="https://beta.edu">Beta School</a>'
-        return html, "", ["fetched list"]
-
-    monkeypatch.setattr(bd_agent, "fetch_page", fake_fetch_page)
-
     result = asyncio.run(
         bd_agent.research_candidate_node(
             {
@@ -143,8 +133,7 @@ def test_research_candidate_node_directory_expands_entities(monkeypatch):
     event_names = [e["event"] for e in result["events"]]
     assert result["skip_current"] is True
     assert "directory_detected" in event_names
-    assert "directory_expansion_done" in event_names
-    assert any(c.get("url") == "https://alpha.edu" for c in result["candidates"])
+    assert "research_skipped" in event_names
 
 
 def test_refill_candidates_node_adds_candidates(monkeypatch):
@@ -242,6 +231,24 @@ def test_email_candidate_node_appends_assembled(monkeypatch):
     assert result["events"][1]["event"] == "email_done"
 
 
+def test_directory_classifier_does_not_skip_best_alone():
+    candidate = {
+        "title": "Best Fashion School in Japan - Example University",
+        "url": "https://example-university.edu/fashion",
+        "snippet": "Official program page",
+    }
+    assert bd_agent.is_directory_candidate(candidate) is False
+
+
+def test_directory_classifier_skips_top_n_list_path():
+    candidate = {
+        "title": "Top 20 Fashion Schools",
+        "url": "https://example.com/top-20-fashion-schools",
+        "snippet": "Ranking list",
+    }
+    assert bd_agent.is_directory_candidate(candidate) is True
+
+
 def test_route_helpers():
     assert bd_agent.route_after_prepare({"current_candidate": None}) == "finalize"
     assert bd_agent.route_after_prepare({"current_candidate": {"title": "A"}}) == "research_candidate"
@@ -251,4 +258,3 @@ def test_route_helpers():
 
     assert bd_agent.route_after_advance({"qualified_count": 2, "n": 2, "candidate_index": 0, "candidates": [{}], "search_attempts": 1, "max_search_attempts": 3}) == "finalize"
     assert bd_agent.route_after_advance({"qualified_count": 0, "n": 2, "candidate_index": 1, "candidates": [{}, {}], "search_attempts": 1, "max_search_attempts": 3}) == "prepare_candidate"
-

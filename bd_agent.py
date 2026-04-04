@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import re
 from datetime import datetime
 from typing import Any, TypedDict
 from urllib.parse import urlparse
@@ -8,25 +9,52 @@ from urllib.parse import urlparse
 from langgraph.graph import END, START, StateGraph
 
 from emailer import draft_email
-from researcher import extract_directory_entities, fetch_page, research_target
+from researcher import research_target
 from scorer import score_target
 from searcher import search_targets
 
 
 DIRECTORY_KEYWORDS = [
-    "top ", "best ", "directory", "list of", "rank", "ranking",
-    "agencies in", "agencies for", "clutch", "sortlist", "designrush",
-    "universities offering", "programs in", "schools in",
+    "top ", "directory", "list of", "rank", "ranking",
+    "agencies in", "agencies for", "universities offering", "programs in", "schools in",
+]
+
+DIRECTORY_DOMAINS = {
+    "clutch.co", "sortlist.com", "designrush.com", "feedspot.com",
+    "goodfirms.co", "yell.com", "agencyspotter.com",
+}
+
+DIRECTORY_PATH_HINTS = [
+    "/top-", "/top_", "/best-", "/best_", "/ranking", "/rankings", "/directory", "/directories", "/list-of",
 ]
 
 
 def is_directory_candidate(candidate: dict[str, Any]) -> bool:
-    text = " ".join([
-        str(candidate.get("title", "")),
-        str(candidate.get("snippet", "")),
-        str(candidate.get("url", "")),
-    ]).lower()
-    return any(k in text for k in DIRECTORY_KEYWORDS)
+    title = str(candidate.get("title", "")).lower()
+    snippet = str(candidate.get("snippet", "")).lower()
+    url = str(candidate.get("url", "")).lower()
+    domain = normalize_domain(url)
+    path = (urlparse(url).path or "").lower()
+    text = " ".join([title, snippet, url])
+
+    if domain in DIRECTORY_DOMAINS:
+        return True
+
+    if any(hint in path for hint in DIRECTORY_PATH_HINTS):
+        return True
+
+    has_rank_words = any(k in text for k in DIRECTORY_KEYWORDS)
+    has_top_n_pattern = bool(re.search(r"\btop\s*\d+\b", text))
+
+    # Important: 'best' alone is too noisy (often self-description on official sites).
+    has_best_combo = ("best" in text) and (
+        bool(re.search(r"\bbest\s*\d+\b", text))
+        or "directory" in text
+        or "ranking" in text
+        or "list of" in text
+    )
+
+    return has_rank_words or has_top_n_pattern or has_best_combo
 
 
 def normalize_domain(url: str) -> str:
@@ -219,85 +247,18 @@ async def research_candidate_node(state: BDState) -> BDState:
                 "url": url,
             },
         })
-
-        html, _, fetch_steps = await asyncio.to_thread(fetch_page, url)
         events.append({
-            "event": "directory_expansion_started",
-            "data": {"index": index + 1, "url": url},
-        })
-
-        entities = extract_directory_entities(html, url)
-        entities = entities[: state.get("max_entities_per_directory", 10)]
-
-        discovered_candidates = []
-        for entity in entities:
-            entity_name = entity.get("name", "").strip()
-            entity_url = entity.get("url", "").strip()
-
-            if not entity_url:
-                events.append({
-                    "event": "entity_search_fallback",
-                    "data": {"index": index + 1, "name": entity_name},
-                })
-                fallback_q = f"{entity_name} official website"
-                fallback = await asyncio.to_thread(search_targets, fallback_q, 2)
-                fallback_items = fallback.get("data", [])
-                for item in fallback_items:
-                    fallback_url = str(item.get("url", "")).strip()
-                    if not fallback_url:
-                        continue
-                    if is_directory_candidate(item):
-                        continue
-                    entity_url = fallback_url
-                    break
-
-            if not entity_url:
-                events.append({
-                    "event": "entity_skipped",
-                    "data": {
-                        "index": index + 1,
-                        "name": entity_name,
-                        "reason": "No resolvable official website",
-                    },
-                })
-                continue
-
-            if normalize_domain(entity_url) == normalize_domain(url):
-                continue
-
-            discovered_candidates.append(build_candidate(entity_name, entity_url, f"Discovered from {url}"))
-            events.append({
-                "event": "entity_discovered",
-                "data": {
-                    "index": index + 1,
-                    "name": entity_name,
-                    "url": entity_url,
-                },
-            })
-
-        candidates = list(state.get("candidates", []))
-        seen_urls = set(state.get("seen_urls", set()))
-        seen_domains = set(state.get("seen_domains", set()))
-        max_total = state.get("max_candidates_total", 220)
-
-        merged, added = merge_candidates(candidates, discovered_candidates, seen_urls, seen_domains, max_total)
-
-        events.append({
-            "event": "directory_expansion_done",
+            "event": "research_skipped",
             "data": {
                 "index": index + 1,
+                "reason": "Website appears to be a list/directory/ranking page, skipping for now",
                 "url": url,
-                "discovered": len(added),
-                "steps": fetch_steps,
+                "steps": ["Directory/ranking candidates are temporarily hard-skipped in main flow"],
             },
         })
-
         return {
             "current_profile": {},
             "skip_current": True,
-            "candidates": merged,
-            "seen_urls": seen_urls,
-            "seen_domains": seen_domains,
             "events": events,
         }
 

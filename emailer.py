@@ -6,6 +6,30 @@ from prompts import EMAIL_PROMPT
 
 client = OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
 
+
+def _first_contact_email(profile: dict) -> str | None:
+    standard_fields = profile.get("standard_fields")
+    if isinstance(standard_fields, dict) and "contacts" in standard_fields:
+        contacts = standard_fields.get("contacts") or []
+    else:
+        contacts = profile.get("contacts", [])
+
+    if not isinstance(contacts, list):
+        return None
+
+    for contact in contacts:
+        if not isinstance(contact, dict):
+            continue
+        raw = str(contact.get("email") or "").strip()
+        if not raw:
+            continue
+        matches = re.findall(r"[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}", raw, flags=re.IGNORECASE)
+        if matches:
+            return matches[0].lower()
+
+    return None
+
+
 def draft_email(profile: dict, scoring: dict) -> dict:
     """Draft a highly personalized outreach email."""
 
@@ -42,21 +66,7 @@ def draft_email(profile: dict, scoring: dict) -> dict:
             body = trim_resp.choices[0].message.content.strip()
             word_count = len(body.split())
 
-        # Extract email from contacts - handle both old and new profile structures
-        contact_email = None
-
-        # Try new structure first (standard_fields)
-        standard_fields = profile.get("standard_fields")
-        if isinstance(standard_fields, dict) and "contacts" in standard_fields:
-            contacts = standard_fields.get("contacts") or []
-        else:
-            contacts = profile.get("contacts", [])
-
-        if contacts and isinstance(contacts, list):
-            for contact in contacts:
-                if isinstance(contact, dict) and contact.get("email"):
-                    contact_email = contact["email"]
-                    break
+        contact_email = _first_contact_email(profile)
 
         return {
             "subject": data.get("subject", ""),
@@ -68,19 +78,7 @@ def draft_email(profile: dict, scoring: dict) -> dict:
         }
     except Exception as e:
         # Extract email from contacts if available - handle both structures
-        contact_email = None
-
-        standard_fields = profile.get("standard_fields")
-        if isinstance(standard_fields, dict) and "contacts" in standard_fields:
-            contacts = standard_fields.get("contacts") or []
-        else:
-            contacts = profile.get("contacts", [])
-
-        if contacts and isinstance(contacts, list):
-            for contact in contacts:
-                if isinstance(contact, dict) and contact.get("email"):
-                    contact_email = contact["email"]
-                    break
+        contact_email = _first_contact_email(profile)
 
         return {
             "subject": f"Sparkit x {profile.get('name', 'Your Company')}",

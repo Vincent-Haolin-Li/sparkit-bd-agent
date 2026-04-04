@@ -14,6 +14,157 @@ BAD_EMAIL_SUFFIXES = {
     "css", "js", "map", "pdf", "zip", "xml", "json", "txt",
 }
 
+POSITIVE_CONTACT_TOKENS = [
+    "contact", "contact-us", "get in touch", "reach", "admission", "office",
+    "intro", "about", "faculty", "staff", "department", "enquiry", "inquiry",
+]
+
+NEGATIVE_CONTACT_TOKENS = [
+    "news", "event", "blog", "honor", "ranking", "read more", "view all",
+    "pdf", "privacy", "terms",
+]
+
+BAD_LINK_SUFFIXES = {
+    ".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".avif", ".ico",
+    ".css", ".js", ".map", ".pdf", ".zip", ".xml", ".json", ".txt",
+}
+
+
+def get_site_root(url: str) -> str:
+    try:
+        parsed = urlparse(url or "")
+        scheme = parsed.scheme or "https"
+        if parsed.netloc:
+            return f"{scheme}://{parsed.netloc}/"
+    except Exception:
+        pass
+    return url
+
+
+def is_same_domain(url: str, base_domain: str) -> bool:
+    domain = _normalize_domain(url)
+    base = (base_domain or "").lower().replace("www.", "")
+    if not domain or not base:
+        return False
+    return domain == base or domain.endswith(f".{base}") or base.endswith(f".{domain}")
+
+
+def normalize_link(base_url: str, href: str) -> str:
+    href = (href or "").strip()
+    if not href:
+        return ""
+    lowered = href.lower()
+    if lowered.startswith(("mailto:", "tel:", "javascript:", "#")):
+        return ""
+
+    abs_url = urljoin(base_url, href)
+    parsed = urlparse(abs_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return ""
+
+    clean = parsed._replace(fragment="")
+    return clean.geturl()
+
+
+def score_contact_link(url: str, anchor_text: str = "") -> int:
+    combined = f"{url} {anchor_text}".lower()
+    score = 0
+
+    for token in POSITIVE_CONTACT_TOKENS:
+        if token in combined:
+            score += 2
+
+    for token in NEGATIVE_CONTACT_TOKENS:
+        if token in combined:
+            score -= 2
+
+    parsed = urlparse(url)
+    path = (parsed.path or "").lower()
+    if any(path.endswith(ext) for ext in BAD_LINK_SUFFIXES):
+        score -= 4
+
+    if re.search(r"/top[-_/]?\d+", path):
+        score -= 3
+
+    return score
+
+
+def find_contact_page_candidates(base_url: str, html_text: str, base_domain: str, top_k: int = 8) -> list[dict]:
+    if not html_text:
+        return []
+
+    scored = {}
+    anchor_matches = re.findall(r'<a[^>]+href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', html_text, flags=re.IGNORECASE | re.DOTALL)
+
+    for href, inner in anchor_matches:
+        normalized_url = normalize_link(base_url, href)
+        if not normalized_url or not is_same_domain(normalized_url, base_domain):
+            continue
+
+        anchor_text = " ".join(re.sub(r"<[^>]+>", " ", inner).split()).strip()
+        score = score_contact_link(normalized_url, anchor_text)
+        if score <= 0:
+            continue
+
+        current = scored.get(normalized_url)
+        if not current or score > current["score"]:
+            scored[normalized_url] = {
+                "url": normalized_url,
+                "score": score,
+                "anchor_text": anchor_text,
+            }
+
+    return sorted(scored.values(), key=lambda x: x["score"], reverse=True)[:top_k]
+
+
+def discover_contact_pages(seed_urls: list[str], base_domain: str, max_pages: int = 20, max_depth: int = 2) -> tuple[list[dict], list[str]]:
+    steps = []
+    queue = []
+    seen_queue = set()
+
+    for u in seed_urls:
+        if u and u not in seen_queue:
+            seen_queue.add(u)
+            queue.append((u, 0))
+
+    visited = set()
+    discovered = {}
+
+    while queue and len(visited) < max_pages:
+        current_url, depth = queue.pop(0)
+        if current_url in visited:
+            continue
+        visited.add(current_url)
+
+        html, text, fetch_steps = fetch_page(current_url)
+        steps.extend(fetch_steps)
+        if not html:
+            continue
+
+        links = find_contact_page_candidates(current_url, html, base_domain, top_k=8)
+        for item in links:
+            entry = discovered.get(item["url"])
+            candidate = {
+                "url": item["url"],
+                "score": item["score"],
+                "anchor_text": item.get("anchor_text", ""),
+                "source_url": current_url,
+                "depth": depth + 1,
+            }
+            if not entry or candidate["score"] > entry["score"]:
+                discovered[item["url"]] = candidate
+
+            if depth < max_depth and item["url"] not in visited and item["url"] not in seen_queue:
+                seen_queue.add(item["url"])
+                queue.append((item["url"], depth + 1))
+
+        strong_hits = sum(1 for x in discovered.values() if x["score"] >= 4)
+        if strong_hits >= 8:
+            steps.append("Discovery reached sufficient high-signal contact pages")
+            break
+
+    return sorted(discovered.values(), key=lambda x: x["score"], reverse=True), steps
+
 
 def is_plausible_email(email: str) -> bool:
     email = (email or "").strip().lower()
@@ -81,11 +232,27 @@ def fetch_page(url: str) -> tuple[str, str, list]:
         return "", "", steps
 
 
+def deobfuscate_email_text(text: str) -> str:
+    if not text:
+        return ""
+
+    normalized = str(text)
+    normalized = re.sub(r"\[(?:\s*)at(?:\s*)\]|\((?:\s*)at(?:\s*)\)", "@", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"\[(?:\s*)dot(?:\s*)\]|\((?:\s*)dot(?:\s*)\)", ".", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"\s+at\s+", "@", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"\s+dot\s+", ".", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"\s*@\s*", "@", normalized)
+    normalized = re.sub(r"\s*\.\s*", ".", normalized)
+    return normalized
+
+
 def extract_emails(text: str) -> list[str]:
     """Extract unique plausible email addresses from text."""
     if not text:
         return []
-    matches = re.findall(r"[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}", text, flags=re.IGNORECASE)
+
+    normalized_text = deobfuscate_email_text(text)
+    matches = re.findall(r"[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}", normalized_text, flags=re.IGNORECASE)
     seen = set()
     emails = []
     for m in matches:
@@ -193,8 +360,9 @@ def dedupe_contacts(contacts: list) -> list[dict]:
             if (c["emails"] or c["phones"]) and not (emails or phones):
                 continue
 
+        output_name = "" if c["is_generic"] else c["name"]
         deduped.append({
-            "name": c["name"] or "General",
+            "name": output_name,
             "role": c["role"],
             "email": "; ".join(emails),
             "phone": "; ".join(phones),
@@ -411,7 +579,7 @@ def extract_profile(
 
     if fallback_emails and not existing_emails:
         contacts.insert(0, {
-            "name": "General",
+            "name": "",
             "role": "",
             "email": "; ".join(fallback_emails),
             "phone": "; ".join(fallback_phones) if fallback_phones else ""
@@ -446,42 +614,65 @@ def research_target(title: str, url: str, snippet: str) -> dict:
     """Fetch and extract profile from a URL."""
     all_steps = []
 
-    # Visit homepage
-    html, page_text, fetch_steps = fetch_page(url)
-    all_steps.extend(fetch_steps)
+    root_url = get_site_root(url)
+    base_domain = _normalize_domain(root_url or url)
 
-    source_emails = extract_mailto_emails(html)
-
-    # Find key pages
-    extra_info = ""
+    page_text = ""
+    source_emails = []
+    extra_info_parts = []
+    fetched_any = False
     contact_url = None
-    if html and len(page_text) > 200:
-        key_pages = find_key_pages(url, html)
-        contact_url = key_pages.get("contact")
 
-        # Visit About page
-        if key_pages["about"]:
-            about_html, about_text, about_steps = fetch_page(key_pages["about"])
-            all_steps.extend(about_steps)
-            source_emails.extend(extract_mailto_emails(about_html))
-            if about_text:
-                extra_info += about_text[:2500]
+    ordered_seeds = []
+    for seed in [root_url, url]:
+        if seed and seed not in ordered_seeds:
+            ordered_seeds.append(seed)
 
-        # Visit Team page
-        if key_pages["team"]:
-            team_html, team_text, team_steps = fetch_page(key_pages["team"])
-            all_steps.extend(team_steps)
-            source_emails.extend(extract_mailto_emails(team_html))
-            if team_text:
-                extra_info += "\n" + team_text[:2000]
+    for i, seed in enumerate(ordered_seeds):
+        html, text, fetch_steps = fetch_page(seed)
+        all_steps.extend(fetch_steps)
 
-        # Visit Contact page
-        if key_pages["contact"]:
-            contact_html, contact_text, contact_steps = fetch_page(key_pages["contact"])
-            all_steps.extend(contact_steps)
-            source_emails.extend(extract_mailto_emails(contact_html))
-            if contact_text:
-                extra_info += "\n" + contact_text[:4000]
+        if html:
+            source_emails.extend(extract_mailto_emails(html))
+
+        if text and i == 0:
+            page_text = text
+        elif text and not page_text:
+            page_text = text
+
+        if text:
+            fetched_any = True
+
+    discovered_pages, discovery_steps = discover_contact_pages(ordered_seeds, base_domain, max_pages=20, max_depth=2)
+    all_steps.extend(discovery_steps)
+
+    discovered_emails = []
+    for idx, item in enumerate(discovered_pages[:12]):
+        page_url = item.get("url")
+        if not page_url:
+            continue
+
+        html, text, fetch_steps = fetch_page(page_url)
+        all_steps.extend(fetch_steps)
+
+        if html:
+            mailto_emails = extract_mailto_emails(html)
+            source_emails.extend(mailto_emails)
+            discovered_emails.extend(mailto_emails)
+
+        if text:
+            extra_info_parts.append(text[:2000])
+
+        if idx == 0:
+            contact_url = page_url
+
+    if discovered_pages and not contact_url:
+        contact_url = discovered_pages[0].get("url")
+
+    if discovered_emails:
+        all_steps.append(f"Detected {len(set(discovered_emails))} additional high-confidence email(s) from discovered pages")
+
+    extra_info = "\n".join(extra_info_parts)[:9000]
 
     # Extract information
     profile, extract_steps = extract_profile(url, snippet, page_text, extra_info, contact_url, source_emails)
@@ -494,7 +685,7 @@ def research_target(title: str, url: str, snippet: str) -> dict:
         "success": True,
         "data": profile,
         "steps": all_steps,
-        "fetched_homepage": bool(page_text.strip())
+        "fetched_homepage": fetched_any,
     }
 
 

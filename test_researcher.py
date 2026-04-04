@@ -1,4 +1,5 @@
 import pytest
+import researcher
 from researcher import (
     is_plausible_email,
     extract_emails,
@@ -7,6 +8,9 @@ from researcher import (
     normalize_profile,
     dedupe_contacts,
     extract_directory_entities,
+    get_site_root,
+    find_contact_page_candidates,
+    discover_contact_pages,
 )
 
 
@@ -158,7 +162,7 @@ class TestContactDedup:
         assert len(deduped) == 2
         assert all(c["name"].lower() != "general" for c in deduped)
 
-    def test_keep_general_for_unique_email(self):
+    def test_keep_generic_contact_for_unique_email(self):
         contacts = [
             {"name": "Jake Posner", "role": "Founder", "email": "jake@jaan-studio.com", "phone": ""},
             {"name": "General", "role": "", "email": "hello@jaan-studio.com", "phone": ""},
@@ -167,7 +171,7 @@ class TestContactDedup:
         deduped = dedupe_contacts(contacts)
 
         assert len(deduped) == 2
-        assert any(c["name"].lower() == "general" for c in deduped)
+        assert any(c["name"] == "" and c["email"] == "hello@jaan-studio.com" for c in deduped)
 
 
 class TestDirectoryEntityExtraction:
@@ -184,6 +188,73 @@ class TestDirectoryEntityExtraction:
         assert "Alpha Fashion School" in names
         assert "Beta Design Institute" in names
         assert all("ranking" not in n.lower() for n in names)
+
+
+class TestContactDiscovery:
+    def test_get_site_root_from_deep_url(self):
+        assert get_site_root("https://dfd.asia.edu.tw/en/honor") == "https://dfd.asia.edu.tw/"
+
+    def test_scored_link_discovery_matches_nonstandard_contact_path(self):
+        html = '''
+        <a href="/en/intro/intro_8">Contact us</a>
+        <a href="/en/honor">Honor</a>
+        '''
+        candidates = find_contact_page_candidates("https://dfd.asia.edu.tw/", html, "dfd.asia.edu.tw")
+        urls = [c["url"] for c in candidates]
+        assert "https://dfd.asia.edu.tw/en/intro/intro_8" in urls
+        assert "https://dfd.asia.edu.tw/en/honor" not in urls
+
+    def test_discovery_prefers_same_domain_and_skips_noise(self, monkeypatch):
+        html_map = {
+            "https://example.edu/": '<a href="/contact">Contact</a><a href="https://facebook.com/x">FB</a><a href="/news">News</a>',
+            "https://example.edu/contact": '<a href="/department/admission">Admissions Office</a>',
+            "https://example.edu/department/admission": 'Admissions: office@example.edu',
+        }
+
+        def fake_fetch_page(url):
+            html = html_map.get(url, "")
+            return html, html, [f"Visiting: {url}"]
+
+        monkeypatch.setattr(researcher, "fetch_page", fake_fetch_page)
+
+        discovered, _ = discover_contact_pages(["https://example.edu/"], "example.edu", max_pages=10, max_depth=2)
+        urls = [d["url"] for d in discovered]
+
+        assert "https://example.edu/contact" in urls
+        assert "https://example.edu/department/admission" in urls
+        assert all("facebook.com" not in u for u in urls)
+        assert all("/news" not in u for u in urls)
+
+    def test_extract_emails_from_obfuscated_patterns(self):
+        text = "Reach us: a-jen [at] asia.edu.tw or cheri6688 (at) hotmail (dot) com"
+        emails = extract_emails(text)
+        assert "a-jen@asia.edu.tw" in emails
+        assert "cheri6688@hotmail.com" in emails
+
+    def test_research_target_uses_root_first_when_input_is_deep_path(self, monkeypatch):
+        calls = []
+
+        def fake_fetch_page(url):
+            calls.append(url)
+            if url == "https://dfd.asia.edu.tw/":
+                html = '<a href="/en/intro/intro_8">Contact</a>'
+                return html, "home", [f"Visiting: {url}"]
+            if url == "https://dfd.asia.edu.tw/en/honor":
+                return "<html>Honor</html>", "honor", [f"Visiting: {url}"]
+            if url == "https://dfd.asia.edu.tw/en/intro/intro_8":
+                return "mailto:info@dfd.asia.edu.tw", "contact info@dfd.asia.edu.tw", [f"Visiting: {url}"]
+            return "", "", [f"Visiting: {url}"]
+
+        def fake_extract_profile(url, snippet, page_text, extra_info="", contact_url=None, source_emails=None):
+            return ({"name": "DFD", "standard_fields": {"contacts": []}}, ["ok"])
+
+        monkeypatch.setattr(researcher, "fetch_page", fake_fetch_page)
+        monkeypatch.setattr(researcher, "extract_profile", fake_extract_profile)
+
+        researcher.research_target("DFD", "https://dfd.asia.edu.tw/en/honor", "")
+
+        assert calls[0] == "https://dfd.asia.edu.tw/"
+        assert calls[1] == "https://dfd.asia.edu.tw/en/honor"
 
     """Test profile normalization"""
 

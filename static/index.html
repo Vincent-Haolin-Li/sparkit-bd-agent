@@ -369,13 +369,13 @@ function renderCard(t) {
   }).join('');
 
   const contactsHtml = validContacts.map(c => {
-    const name = String(c.name || 'General').trim();
+    const name = String(c.name || '').trim();
     const role = String(c.role || '').trim();
     const email = String(c.email || '').trim();
     const phone = String(c.phone || '').trim();
-    const label = role ? `${name} · ${role}` : name;
-    const detail = email || phone;
-    return `<span class="tag">${label}${detail ? ` · ${detail}` : ''}</span>`;
+
+    const parts = [name, role, email || phone].filter(Boolean);
+    return `<span class="tag">${parts.join(' · ')}</span>`;
   }).join('');
 
   const confidence = (p.confidence || 'medium').toLowerCase();
