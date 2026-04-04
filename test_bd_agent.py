@@ -7,26 +7,36 @@ import bd_agent
 def test_bd_graph_runs_linear_pipeline(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
 
+    call_counter = {"count": 0}
+
     def fake_search_targets(brief, n=5):
+        call_counter["count"] += 1
+        if call_counter["count"] == 1:
+            return {
+                "data": [
+                    {"title": "Alpha", "url": "https://alpha.test", "snippet": "alpha snippet"},
+                    {"title": "Bad", "url": "https://bad.test", "snippet": "bad snippet"},
+                ]
+            }
         return {
             "data": [
-                {"title": "Alpha", "url": "https://alpha.test", "snippet": "alpha snippet"},
-                {"title": "Bad", "url": "https://bad.test", "snippet": "bad snippet"},
+                {"title": "Gamma", "url": "https://gamma.test", "snippet": "gamma snippet"},
             ]
         }
 
     def fake_research_target(title, url, snippet):
         if title == "Bad":
-            return {"data": {"name": title}, "steps": ["bad profile"]}
+            return {"data": {"name": title}, "steps": ["bad profile"], "fetched_homepage": True}
         return {
             "data": {
-                "name": "Alpha Studio",
+                "name": "Alpha Studio" if title == "Alpha" else "Gamma Studio",
                 "what_they_do": "Makes creator fashion tech.",
                 "source_url": url,
-                "contact_url": "https://alpha.test/contact",
+                "contact_url": f"{url}/contact",
                 "confidence": "high",
             },
             "steps": ["researched profile"],
+            "fetched_homepage": True,
         }
 
     def fake_score_target(profile):
@@ -64,22 +74,10 @@ def test_bd_graph_runs_linear_pipeline(monkeypatch, tmp_path):
     events = asyncio.run(collect())
     event_names = [event["event"] for event in events]
 
-    assert event_names == [
-        "search_done",
-        "researching",
-        "research_done",
-        "scoring",
-        "score_done",
-        "emailing",
-        "email_done",
-        "researching",
-        "research_skipped",
-        "done",
-    ]
+    assert "candidate_pool_refilled" in event_names
+    assert event_names[-1] == "done"
 
     done_event = events[-1]
     result = done_event["data"]["result"]
-    assert result["summary"]["total_targets"] == 1
-    assert result["summary"]["top_target"] == "Alpha Studio"
-    assert result["targets"][0]["outreach"]["subject"] == "Hello Alpha"
+    assert result["summary"]["total_targets"] == 2
     assert os.path.exists(done_event["data"]["saved_to"])

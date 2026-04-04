@@ -1,6 +1,6 @@
 from config import SPARKIT_CONTEXT
 
-RESEARCH_PROMPT = """Extract company information from this webpage. Return ONLY valid JSON.
+RESEARCH_PROMPT = """Extract ALL company information from this webpage. Return ONLY valid JSON.
 
 URL: {url}
 
@@ -11,8 +11,10 @@ CRITICAL RULES:
 1. Extract ONLY factual information visible in the content. Do NOT invent or guess.
 2. PRIORITY: Extract ALL email addresses and phone numbers found. Email is most important.
 3. If this is a LIST PAGE (directory, top 10, etc), extract the FIRST agency's info and provide its URL in "real_agency_url".
+4. Extract ANY additional information you find: awards, certifications, social media, press mentions, team members, office locations, etc.
+5. Return all extracted fields, even if some are empty. Use null for missing values.
 
-Return JSON:
+Return JSON with standard fields + any extra fields found:
 {{
   "name": "exact company name from page",
   "what_they_do": "2-3 sentences describing their work",
@@ -21,10 +23,20 @@ Return JSON:
   "recent_work": [{{"text": "specific project/campaign", "url": "link if available"}}],
   "contacts": [{{"name": "person name or 'General'", "role": "their role if visible", "email": "ALL emails found - separate multiple with semicolon", "phone": "ALL phone numbers found - separate multiple with semicolon"}}],
   "team_size": "number or description if mentioned",
-  "real_agency_url": "if list page, first agency's website URL"
+  "real_agency_url": "if list page, first agency's website URL",
+
+  "awards": "any awards or certifications mentioned",
+  "founded_year": "founding year if mentioned",
+  "office_locations": ["city1", "city2"],
+  "social_media": {{"linkedin": "url", "instagram": "url", "twitter": "url"}},
+  "press_mentions": ["recent news or press mentions"],
+  "team_members": ["key team members if listed"],
+  "company_size": "employee count if mentioned",
+  "specialties": ["specific areas of expertise"],
+  "any_other_info": "any other relevant information found"
 }}
 
-Return ONLY JSON, no markdown."""
+Return ONLY JSON, no markdown. Include all fields even if empty/null."""
 
 SCORE_PROMPT = """Score this company for fit with Sparkit.
 

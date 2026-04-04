@@ -217,25 +217,60 @@ function runPipeline() {
     if (type === 'searching') {
       addLog('search', '⌕', `<strong>Searching</strong> — ${data.brief}`);
     }
+    else if (type === 'search_error') {
+      addLog('skip', '⚠', `<span style="color:#fbbf24"><strong>Search warning:</strong> ${data.message || 'Search returned an error'}</span>`);
+    }
     else if (type === 'search_done') {
-      const links = data.candidates.map(c =>
+      const links = (data.candidates || []).map(c =>
         `<a href="${c.url}" target="_blank">${c.title || c.url}</a>`
       ).join(' &nbsp;·&nbsp; ');
-      addLog('search', '⌕', `Found <strong>${data.count}</strong> candidates &nbsp;·&nbsp; ${links}`);
+      addLog('search', '⌕', `Found <strong>${data.count}</strong> candidates ${links ? `&nbsp;·&nbsp; ${links}` : ''}`);
     }
     else if (type === 'researching') {
       addLog('research', '↗', `Researching <strong>${data.index}</strong>: <a href="${data.url}" target="_blank">${data.title}</a>`);
     }
+    else if (type === 'directory_detected') {
+      addLog('search', '☰', `Directory detected <strong>#${data.index}</strong>: <a href="${data.url}" target="_blank">${data.title || data.url}</a>`);
+    }
+    else if (type === 'directory_expansion_started') {
+      addLog('research', '↺', `Expanding directory candidates for <strong>#${data.index}</strong>…`);
+    }
+    else if (type === 'entity_discovered') {
+      addLog('research', '＋', `Discovered entity: <strong>${data.name}</strong>${data.url ? ` &nbsp;·&nbsp; <a href="${data.url}" target="_blank">source</a>` : ''}`);
+    }
+    else if (type === 'entity_search_fallback') {
+      addLog('research', '⌕', `Fallback search for entity website: <strong>${data.name}</strong>`);
+    }
+    else if (type === 'entity_skipped') {
+      addLog('skip', '⤼', `Skipped entity <strong>${data.name || ''}</strong> — ${data.reason || 'No website found'}`);
+    }
+    else if (type === 'directory_expansion_done') {
+      const details = data.steps || [];
+      addLog('research', '✓', `Directory expansion done for <strong>#${data.index}</strong> — discovered <strong>${data.discovered || 0}</strong> entities`, details);
+    }
+    else if (type === 'candidate_pool_refilled') {
+      addLog('search', '↻', `Candidate refill #${data.attempt}: added <strong>${data.added}</strong>, pool now <strong>${data.total_candidates}</strong>`);
+    }
+    else if (type === 'research_step') {
+      addLog('research', '↗', `Step <strong>${data.index}</strong>: ${data.step || ''}`);
+    }
+    else if (type === 'research_skipped') {
+      const details = data.steps || [];
+      addLog('skip', '⤼', `<strong>Skipped #${data.index}</strong> — ${data.reason || 'Skipped'}${data.url ? ` &nbsp;·&nbsp; <a href="${data.url}" target="_blank">source</a>` : ''}`, details);
+    }
     else if (type === 'research_done') {
       const steps = data.steps || [];
       addLog('research', '↗',
-        `<strong>${data.name}</strong> &nbsp;
-         <a href="${data.url}" target="_blank">↗ source</a>`,
+        `<strong>${data.name || 'Unknown'}</strong>
+         ${data.url ? `&nbsp;<a href="${data.url}" target="_blank">↗ source</a>` : ''}`,
         steps
       );
     }
     else if (type === 'scoring') {
-      addLog('score', '★', `Scoring <strong>${data.name}</strong>…`);
+      addLog('score', '★', `Scoring <strong>${data.name || 'target'}</strong>…`);
+    }
+    else if (type === 'scoring_step') {
+      addLog('score', '★', `Step <strong>${data.index}</strong>: ${data.step || ''}`);
     }
     else if (type === 'score_done') {
       const s = data.score;
@@ -250,7 +285,10 @@ function runPipeline() {
       );
     }
     else if (type === 'emailing') {
-      addLog('email', '✉', `Drafting email for <strong>${data.name}</strong>…`);
+      addLog('email', '✉', `Drafting email for <strong>${data.name || 'target'}</strong>…`);
+    }
+    else if (type === 'email_step') {
+      addLog('email', '✉', `Step <strong>${data.index}</strong>: ${data.step || ''}`);
     }
     else if (type === 'email_done') {
       addLog('email', '✉',
@@ -295,21 +333,60 @@ function renderResults(data) {
 }
 
 function renderCard(t) {
-  const p = t.profile;
-  const s = t.scoring;
-  const e = t.outreach;
-  const sc = scoreColor(s.score);
+  const p = t.profile || {};
+  const sf = p.standard_fields || {};
+  const s = t.scoring || {};
+  const e = t.outreach || {};
 
-  const clients = (p.clients || []).map(c => `<span class="tag">${c}</span>`).join('') || '<span style="color:#555">—</span>';
-  const recentWork = (p.recent_work || []).map(r => {
+  const whatTheyDo = (sf.what_they_do || p.what_they_do || '').trim();
+  const positioning = (sf.positioning || p.positioning || '').trim();
+  const introText = whatTheyDo || positioning;
+
+  const clientsData = Array.isArray(sf.clients) ? sf.clients : (Array.isArray(p.clients) ? p.clients : []);
+  const recentWorkData = Array.isArray(sf.recent_work) ? sf.recent_work : (Array.isArray(p.recent_work) ? p.recent_work : []);
+  const contactsData = Array.isArray(sf.contacts) ? sf.contacts : (Array.isArray(p.contacts) ? p.contacts : []);
+
+  const validClients = clientsData.map(c => String(c || '').trim()).filter(Boolean);
+  const validContacts = contactsData.filter(c => c && typeof c === 'object' && (c.name || c.role || c.email || c.phone));
+  const validRecent = recentWorkData.filter(item => {
+    if (!item) return false;
+    if (typeof item === 'string') return item.trim().length > 0;
+    if (typeof item === 'object') return String(item.text || '').trim().length > 0;
+    return false;
+  });
+
+  const hasProfileDetails = Boolean(introText || validClients.length || validContacts.length || validRecent.length);
+
+  const clientsHtml = validClients.map(c => `<span class="tag">${c}</span>`).join('');
+  const recentWorkHtml = validRecent.map(r => {
     if (typeof r === 'object' && r !== null) {
+      const text = (r.text || '').trim() || 'Untitled activity';
       return r.url
-        ? `<li><a href="${r.url}" target="_blank">${r.text}</a></li>`
-        : `<li>${r.text}</li>`;
+        ? `<li><a href="${r.url}" target="_blank">${text}</a></li>`
+        : `<li>${text}</li>`;
     }
-    return `<li>${r}</li>`;
-  }).join('') || '<li style="color:#555">—</li>';
-  const contacts = (p.contacts || []).map(c => `<span class="tag">${c.name}${c.role ? ' · ' + c.role : ''}</span>`).join('') || '<span style="color:#555">—</span>';
+    return `<li>${String(r).trim()}</li>`;
+  }).join('');
+
+  const contactsHtml = validContacts.map(c => {
+    const name = String(c.name || 'General').trim();
+    const role = String(c.role || '').trim();
+    const email = String(c.email || '').trim();
+    const phone = String(c.phone || '').trim();
+    const label = role ? `${name} · ${role}` : name;
+    const detail = email || phone;
+    return `<span class="tag">${label}${detail ? ` · ${detail}` : ''}</span>`;
+  }).join('');
+
+  const confidence = (p.confidence || 'medium').toLowerCase();
+  const confidenceClass = ['high', 'medium', 'low'].includes(confidence) ? confidence : 'medium';
+
+  const sourceUrl = p.source_url || '';
+  const sourceMeta = sourceUrl
+    ? `<a href="${sourceUrl}" target="_blank">${sourceUrl}</a>`
+    : '<span style="color:#555">source unavailable</span>';
+
+  const sc = scoreColor(Number(s.score || 0));
 
   return `
   <div class="target-card">
@@ -318,13 +395,13 @@ function renderCard(t) {
       <div class="card-title">
         <h3>${p.name || '—'}</h3>
         <div class="card-meta">
-          <a href="${p.source_url}" target="_blank">${p.source_url}</a>
+          ${sourceMeta}
           &nbsp;·&nbsp;
-          <span class="confidence-badge confidence-${p.confidence}">${p.confidence}</span>
+          <span class="confidence-badge confidence-${confidenceClass}">${confidenceClass}</span>
         </div>
       </div>
       <div class="score-ring">
-        <div class="score-num" style="color:${sc}">${s.score}</div>
+        <div class="score-num" style="color:${sc}">${s.score ?? '0.0'}</div>
         <div class="score-label">/ 5</div>
       </div>
       <div class="chevron">▾</div>
@@ -333,24 +410,29 @@ function renderCard(t) {
 
       <div class="section">
         <div class="section-title">Company Profile</div>
+        ${hasProfileDetails ? `
         <div class="profile-grid">
+          ${introText ? `
           <div class="profile-item" style="grid-column:1/-1">
             <div class="label">What they do</div>
-            <div class="value">${p.what_they_do || p.positioning || '—'}</div>
-          </div>
+            <div class="value">${introText}</div>
+          </div>` : ''}
+          ${validClients.length ? `
           <div class="profile-item">
             <div class="label">Notable clients</div>
-            <div class="value">${clients}</div>
-          </div>
+            <div class="value">${clientsHtml}</div>
+          </div>` : ''}
+          ${validContacts.length ? `
           <div class="profile-item">
             <div class="label">Key contacts</div>
-            <div class="value">${contacts}</div>
-          </div>
+            <div class="value">${contactsHtml}</div>
+          </div>` : ''}
+          ${validRecent.length ? `
           <div class="profile-item" style="grid-column:1/-1">
             <div class="label">Recent work</div>
-            <div class="value"><ul style="padding-left:16px">${recentWork}</ul></div>
-          </div>
-        </div>
+            <div class="value"><ul style="padding-left:16px">${recentWorkHtml}</ul></div>
+          </div>` : ''}
+        </div>` : `<div class="profile-item"><div class="value" style="color:#777">Profile details unavailable for this source.</div></div>`}
       </div>
 
       <div class="section">
@@ -358,18 +440,18 @@ function renderCard(t) {
         <div class="score-bars">
           <div class="score-bar-row">
             <div class="score-bar-label">Fashion Tech Fit</div>
-            <div class="score-bar-track"><div class="score-bar-fill" style="width:${s.fashion_tech_fit*20}%"></div></div>
-            <div class="score-bar-val">${s.fashion_tech_fit}</div>
+            <div class="score-bar-track"><div class="score-bar-fill" style="width:${(s.fashion_tech_fit || 0)*20}%"></div></div>
+            <div class="score-bar-val">${s.fashion_tech_fit ?? '-'}</div>
           </div>
           <div class="score-bar-row">
             <div class="score-bar-label">Creator Fit</div>
-            <div class="score-bar-track"><div class="score-bar-fill" style="width:${s.creator_fit*20}%"></div></div>
-            <div class="score-bar-val">${s.creator_fit}</div>
+            <div class="score-bar-track"><div class="score-bar-fill" style="width:${(s.creator_fit || 0)*20}%"></div></div>
+            <div class="score-bar-val">${s.creator_fit ?? '-'}</div>
           </div>
           <div class="score-bar-row">
             <div class="score-bar-label">Sustainability Fit</div>
-            <div class="score-bar-track"><div class="score-bar-fill" style="width:${s.sustainability_fit*20}%"></div></div>
-            <div class="score-bar-val">${s.sustainability_fit}</div>
+            <div class="score-bar-track"><div class="score-bar-fill" style="width:${(s.sustainability_fit || 0)*20}%"></div></div>
+            <div class="score-bar-val">${s.sustainability_fit ?? '-'}</div>
           </div>
         </div>
         ${(s.reasoning_steps || []).map(r => `
@@ -378,14 +460,14 @@ function renderCard(t) {
             <div style="font-size:12px;color:#aaa;line-height:1.6;">${r.reasoning}</div>
           </div>
         `).join('')}
-        <div style="margin-top:10px;font-size:13px;color:#888">${s.rationale}</div>
+        <div style="margin-top:10px;font-size:13px;color:#888">${s.rationale || ''}</div>
       </div>
 
       <div class="section">
         <div class="section-title">Outreach Email</div>
         <div class="email-box">
-          <div class="email-subject">Subject: ${e.subject}</div>
-          <div class="email-body">${e.body}</div>
+          <div class="email-subject">Subject: ${e.subject || ''}</div>
+          <div class="email-body">${e.body || ''}</div>
           ${e.hook_fact ? `<div class="email-hook">Hook source: <span>${e.hook_fact}</span></div>` : ''}
         </div>
       </div>

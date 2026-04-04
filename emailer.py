@@ -42,9 +42,16 @@ def draft_email(profile: dict, scoring: dict) -> dict:
             body = trim_resp.choices[0].message.content.strip()
             word_count = len(body.split())
 
-        # Extract email from contacts if available, otherwise use contact_url
+        # Extract email from contacts - handle both old and new profile structures
         contact_email = None
-        contacts = profile.get("contacts", [])
+
+        # Try new structure first (standard_fields)
+        standard_fields = profile.get("standard_fields")
+        if isinstance(standard_fields, dict) and "contacts" in standard_fields:
+            contacts = standard_fields.get("contacts") or []
+        else:
+            contacts = profile.get("contacts", [])
+
         if contacts and isinstance(contacts, list):
             for contact in contacts:
                 if isinstance(contact, dict) and contact.get("email"):
@@ -60,9 +67,15 @@ def draft_email(profile: dict, scoring: dict) -> dict:
             "contact_url": profile.get("contact_url") if not contact_email else None
         }
     except Exception as e:
-        # Extract email from contacts if available
+        # Extract email from contacts if available - handle both structures
         contact_email = None
-        contacts = profile.get("contacts", [])
+
+        standard_fields = profile.get("standard_fields")
+        if isinstance(standard_fields, dict) and "contacts" in standard_fields:
+            contacts = standard_fields.get("contacts") or []
+        else:
+            contacts = profile.get("contacts", [])
+
         if contacts and isinstance(contacts, list):
             for contact in contacts:
                 if isinstance(contact, dict) and contact.get("email"):

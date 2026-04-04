@@ -9,19 +9,20 @@ The pipeline is implemented as a LangGraph `StateGraph` with typed state (`BDSta
 ```
 Brief Input
     ↓
-searcher.py       → Tavily API search (returns up to N candidates)
+searcher.py       → Tavily API search (returns initial candidate pool)
     ↓
-bd_agent.py       → LangGraph state machine orchestrates per-candidate loop
-    ↓  ┌──────────────────────────────────────────────────────┐
-    ↓  │  For each candidate:                                 │
-    ↓  │    1. Pre-filter: skip ranking/directory pages        │
-    ↓  │    2. researcher.py → Fetch homepage + About/Team/    │
-    ↓  │       Contact pages, extract profile via LLM          │
-    ↓  │    3. Post-filter: skip unreachable / list pages /    │
-    ↓  │       insufficient info                               │
-    ↓  │    4. scorer.py → Score on 3 dimensions with reasoning│
-    ↓  │    5. emailer.py → Draft personalized outreach email  │
-    ↓  └──────────────────────────────────────────────────────┘
+bd_agent.py       → LangGraph state machine orchestrates adaptive loop
+    ↓  ┌──────────────────────────────────────────────────────────────┐
+    ↓  │  Adaptive candidate loop:                                   │
+    ↓  │    1. Detect directory/list candidates                      │
+    ↓  │    2. If directory: expand entities from links + fallback   │
+    ↓  │       "<entity> official website" search                   │
+    ↓  │    3. researcher.py → Fetch site content + extract profile  │
+    ↓  │    4. Skip only when unreachable/list/insufficient info     │
+    ↓  │    5. scorer.py → Score on 3 dimensions with reasoning      │
+    ↓  │    6. emailer.py → Draft personalized outreach email        │
+    ↓  │    7. Refill candidate pool when needed until N qualified   │
+    ↓  └──────────────────────────────────────────────────────────────┘
     ↓
 server.py         → SSE streaming to web UI with real-time progress
     ↓
@@ -48,16 +49,18 @@ Output JSON       → Ranked targets with profiles, scores, and emails
 - **Phone extraction with GPS filtering**: Rejects coordinate-like decimals (e.g. `51.5042839`) that commonly appear in embedded map scripts
 
 ### Smart Skip Logic (v1.2)
-The pipeline applies a layered skip strategy to avoid wasting LLM calls on low-value candidates. Crucially, skipping is never based on the final score — only on data availability:
+The pipeline applies a layered skip strategy to avoid wasting LLM calls on low-value candidates. Skipping is never based on final score — only on data availability and page quality.
+
+> Note: In v1.3, directory/list candidates are no longer hard-skipped. They are expanded into entity candidates first, then the same post-fetch checks are applied.
 
 | Stage | Condition | Rationale |
 |-------|-----------|-----------|
-| Pre-fetch | Search result title/snippet/URL matches directory keywords (`top`, `best`, `ranking`, `clutch`, `sortlist`, `designrush`, etc.) | Avoids fetching pages that are aggregator listings, not agency websites |
+| Directory expansion | Search result appears to be a directory/list page (`top`, `best`, `ranking`, `clutch`, `sortlist`, `designrush`, etc.) | Expand entities from the directory, optionally fallback-search each entity's official site, then continue processing |
 | Post-fetch | Homepage returned empty response or HTTP error | Site is unreachable or blocked; no data to extract |
-| Post-extraction | `is_list_page` flag set (content contains "top 10/20", "agency list" + many outbound links) | Page is a directory even if it wasn't caught pre-fetch |
-| Post-extraction | Both company intro (`what_they_do` + `positioning`) AND contact email are missing | Relaxed threshold: keeps candidates that have either a description or an email, only skips when both are absent |
+| Post-extraction | `is_list_page` flag set (content contains "top 10/20", "agency list" + many outbound links) | Page is still a list page after fetch and does not represent the target's own site |
+| Post-extraction | Both company intro (`what_they_do` + `positioning`) AND contact email are missing | Relaxed threshold: keep candidates that have either a description or an email; skip only when both are absent |
 
-Each skip emits a `research_skipped` event with the reason, URL, and detailed steps so the user can see exactly why a candidate was dropped.
+Each skip emits a `research_skipped` event with reason, URL, and detailed steps so you can see exactly why a candidate was dropped.
 
 ### Scoring & Reasoning (v1.2)
 - **Three-dimension scoring**: Fashion-tech fit (40%), Creator fit (35%), Sustainability fit (25%) — weighted to Sparkit's priorities
@@ -78,6 +81,9 @@ Each skip emits a `research_skipped` event with the reason, URL, and detailed st
 
 ### Frontend & Observability
 - **Real-time SSE streaming**: Every pipeline step (search, research, scoring, email) streams progress to the browser
+- **Directory/refill visibility**: UI logs now include `directory_detected`, `directory_expansion_started`, `entity_discovered`, `entity_search_fallback`, `entity_skipped`, `directory_expansion_done`, and `candidate_pool_refilled`
+- **Schema-first rendering**: UI reads `profile.standard_fields.*` first and falls back to legacy fields for compatibility
+- **Conditional profile sections**: Empty profile blocks are hidden; a lightweight fallback message is shown only when all profile details are missing
 - **Expandable log details**: Research steps, scoring reasoning, and skip reasons are shown with expand/collapse toggles
 - **Candidate list display**: All search results shown with numbering immediately after search completes
 - **Process persistence**: Progress logs remain visible and scrollable after pipeline completion, not discarded
@@ -173,14 +179,86 @@ sparkit-bd-agent/
 
 ## Testing
 
-Run the test suite:
+Use `python -m pytest` to ensure tests run in the active environment.
+
+### L0 Unit tests (fast, offline)
 ```bash
-python -m pytest test_bd_agent.py test_server.py -v
+python -m pytest test_researcher.py test_scorer.py test_emailer.py -q
 ```
+
+Includes coverage for v1.3 extraction quality:
+- contact deduplication (drop redundant generic contacts)
+- directory entity extraction from anchor-rich list pages
+
+### L1 Node tests (LangGraph node behavior)
+```bash
+python -m pytest test_bd_agent_nodes.py -q
+```
+
+Includes coverage for v1.3 adaptive flow behavior:
+- directory candidate detection and expansion
+- entity discovery from directory pages
+- fallback official-site entity search
+- candidate pool refill routing and stop conditions
+
+### L2 API contract tests (FastAPI + SSE events)
+```bash
+python -m pytest test_server.py -q
+```
+
+### L3 Offline end-to-end (full pipeline loop with stubs)
+```bash
+python -m pytest test_pipeline_e2e_offline.py -q
+```
+
+### Default CI/local regression (exclude live)
+```bash
+python -m pytest -q -k "not live"
+```
+
+### L4 Live smoke tests (real Tavily + real LLM)
+These are opt-in and require API keys in `.env`.
+
+```bash
+# PowerShell
+$env:RUN_LIVE_TESTS="1"
+python -m pytest test_live_smoke.py -q -m live
+
+# optional cleanup
+Remove-Item Env:RUN_LIVE_TESTS
+```
+
+Live smoke covers:
+- Tavily search (`searcher.py`)
+- LLM scoring (`scorer.py`)
+- LLM research extraction (`researcher.py`)
+- `/run` SSE endpoint path (`server.py`)
+
+### One-command startup check (Windows PowerShell)
+```powershell
+./start.ps1
+```
+
+Useful flags:
+- `./start.ps1 -CoreTests` runs core offline checks quickly
+- `./start.ps1 -SkipTests` validates environment without running tests
+
 
 ## Changelog
 
-### v1.2 (Current)
+### v1.3 (Current)
+- **Adaptive directory handling**: Directory/list candidates are expanded into entity candidates instead of being hard-skipped
+- **Entity fallback search**: If a directory entity has no resolvable URL, the pipeline runs a fallback query (`"<entity> official website"`) and uses the first non-directory result
+- **Candidate refill loop**: Added `refill_candidates` node with dedupe and budget controls (`max_search_attempts`, `max_candidates_total`, `max_entities_per_directory`)
+- **Usable-target stop condition**: Pipeline now stops primarily on `qualified_count >= n`, not just initial candidate traversal
+- **Frontend schema alignment**: UI renders `profile.standard_fields.*` first with legacy fallback support
+- **Cleaner profile rendering**: Empty profile sections are hidden to avoid large placeholder blocks
+- **Expanded SSE observability**: Added UI log support for directory/refill lifecycle events
+- **Contact quality improvement**: Added contact dedup logic to remove redundant generic entries when named contacts share the same email
+- **Test updates**: Added/updated offline tests for directory expansion, refill routing, entity extraction, and adaptive graph completion
+- **Regression status**: `python -m pytest -q -k "not live"` → `62 passed, 4 deselected`
+
+### v1.2 (Previous)
 - **Email extraction hardening**: Added `is_plausible_email` validation to reject asset-filename false positives (`.jpg`, `.png`, `.svg`, etc.) and image-dimension patterns (`683x1024`); added `extract_mailto_emails` for high-confidence email sourcing from HTML `mailto:` links; three-tier email priority with deduplication merge
 - **Phone extraction hardening**: Added GPS coordinate rejection to prevent map-embedded decimals from appearing as phone numbers
 - **Smart skip logic**: Four-layer skip strategy (directory keyword pre-filter → unreachable homepage → list page detection → insufficient info) with relaxed threshold — only skips when both company intro and contact email are missing; no score-based filtering

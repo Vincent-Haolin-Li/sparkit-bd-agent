@@ -5,7 +5,7 @@ from html2text import html2text
 from openai import OpenAI
 from config import OPENAI_API_KEY, OPENAI_BASE_URL, CHAT_MODEL
 from prompts import RESEARCH_PROMPT
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 client = OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
 
@@ -26,6 +26,10 @@ def is_plausible_email(email: str) -> bool:
 
     tld = domain.rsplit(".", 1)[-1]
     if tld in BAD_EMAIL_SUFFIXES:
+        return False
+
+    local_suffix = local.rsplit(".", 1)[-1] if "." in local else ""
+    if local_suffix in BAD_EMAIL_SUFFIXES:
         return False
 
     if re.search(r"\b\d{2,5}x\d{2,5}\b", email):
@@ -133,6 +137,172 @@ def extract_phones(text: str) -> list[str]:
             seen.add(phone)
             phones.append(phone)
     return phones
+
+
+def dedupe_contacts(contacts: list) -> list[dict]:
+    """Deduplicate contacts while preserving named contacts over generic fallbacks."""
+    if not isinstance(contacts, list):
+        return []
+
+    generic_names = {"", "general", "info", "contact", "team", "admin", "support"}
+    normalized_contacts = []
+    seen_exact = set()
+
+    for c in contacts:
+        if not isinstance(c, dict):
+            continue
+
+        name = str(c.get("name") or "").strip()
+        role = str(c.get("role") or "").strip()
+        emails = sorted(extract_emails(c.get("email") or ""))
+        phones = sorted(extract_phones(c.get("phone") or ""))
+
+        exact_key = (
+            name.lower(),
+            role.lower(),
+            tuple(emails),
+            tuple(phones),
+        )
+        if exact_key in seen_exact:
+            continue
+        seen_exact.add(exact_key)
+
+        normalized_contacts.append({
+            "name": name,
+            "role": role,
+            "emails": emails,
+            "phones": phones,
+            "is_generic": name.lower() in generic_names,
+        })
+
+    named_emails = set()
+    named_phones = set()
+    for c in normalized_contacts:
+        if not c["is_generic"]:
+            named_emails.update(c["emails"])
+            named_phones.update(c["phones"])
+
+    deduped = []
+    for c in normalized_contacts:
+        emails = c["emails"]
+        phones = c["phones"]
+
+        if c["is_generic"]:
+            emails = [e for e in emails if e not in named_emails]
+            phones = [p for p in phones if p not in named_phones]
+            if (c["emails"] or c["phones"]) and not (emails or phones):
+                continue
+
+        deduped.append({
+            "name": c["name"] or "General",
+            "role": c["role"],
+            "email": "; ".join(emails),
+            "phone": "; ".join(phones),
+        })
+
+    return deduped
+
+
+def _normalize_domain(url: str) -> str:
+    try:
+        parsed = urlparse(url or "")
+        return parsed.netloc.lower().replace("www.", "")
+    except Exception:
+        return ""
+
+
+def extract_directory_entities(html: str, base_url: str = "") -> list[dict]:
+    """Extract likely institution/company entities from directory/ranking pages."""
+    if not html:
+        return []
+
+    candidates = []
+    seen = set()
+
+    anchor_matches = re.findall(r'<a[^>]+href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', html, flags=re.IGNORECASE | re.DOTALL)
+
+    for href, inner in anchor_matches:
+        text = re.sub(r"<[^>]+>", " ", inner)
+        text = " ".join(text.split()).strip()
+        if len(text) < 3 or len(text) > 120:
+            continue
+
+        lowered = text.lower()
+        if any(k in lowered for k in ["top ", "ranking", "read more", "view all", "learn more", "program"]):
+            continue
+
+        abs_url = urljoin(base_url, href) if base_url else href
+        domain = _normalize_domain(abs_url)
+        if domain and any(bad in domain for bad in ["wikipedia.org", "instagram.com", "facebook.com", "linkedin.com", "youtube.com"]):
+            continue
+
+        key = (lowered, domain)
+        if key in seen:
+            continue
+        seen.add(key)
+
+        candidates.append({
+            "name": text,
+            "url": abs_url if domain else "",
+            "domain": domain,
+        })
+
+    return candidates
+
+
+def normalize_profile(raw_data: dict) -> dict:
+    """
+    Normalize LLM-extracted profile into standard_fields + extra_fields.
+
+    Standard fields: name, what_they_do, positioning, clients, recent_work, contacts, team_size
+    Extra fields: everything else (awards, founded_year, social_media, etc.)
+    """
+    standard_field_names = {
+        "name", "what_they_do", "positioning", "clients", "recent_work",
+        "contacts", "team_size", "source_url", "contact_url", "confidence",
+        "is_list_page", "real_agency_url"
+    }
+
+    standard_fields = {}
+    extra_fields = {}
+
+    for key, value in raw_data.items():
+        if key in standard_field_names:
+            standard_fields[key] = value
+        else:
+            # Skip null/empty extra fields to keep output clean
+            if value is not None and value != "" and value != [] and value != {}:
+                extra_fields[key] = value
+
+    # Ensure standard fields have expected structure
+    if not isinstance(standard_fields.get("clients"), list):
+        standard_fields["clients"] = []
+    if not isinstance(standard_fields.get("recent_work"), list):
+        standard_fields["recent_work"] = []
+    if not isinstance(standard_fields.get("contacts"), list):
+        standard_fields["contacts"] = []
+
+    result = {
+        "name": standard_fields.get("name"),
+        "standard_fields": {
+            "what_they_do": standard_fields.get("what_they_do"),
+            "positioning": standard_fields.get("positioning"),
+            "clients": standard_fields.get("clients", []),
+            "recent_work": standard_fields.get("recent_work", []),
+            "contacts": standard_fields.get("contacts", []),
+            "team_size": standard_fields.get("team_size"),
+        },
+        "source_url": standard_fields.get("source_url"),
+        "contact_url": standard_fields.get("contact_url"),
+        "confidence": standard_fields.get("confidence"),
+        "is_list_page": standard_fields.get("is_list_page", False),
+    }
+
+    # Add extra_fields only if there are any
+    if extra_fields:
+        result["extra_fields"] = extra_fields
+
+    return result
 
 def extract_profile(
     url: str,
@@ -262,12 +432,15 @@ def extract_profile(
                     break
             steps.append("Merged additional regex emails into contacts")
 
-    data["contacts"] = contacts
+    data["contacts"] = dedupe_contacts(contacts)
     data["source_url"] = url
     data["contact_url"] = contact_url
     data["confidence"] = confidence
     data["is_list_page"] = bool(is_list_page and not data.get("real_agency_url"))
-    return data, steps
+
+    # Normalize profile into standard_fields + extra_fields
+    normalized = normalize_profile(data)
+    return normalized, steps
 
 def research_target(title: str, url: str, snippet: str) -> dict:
     """Fetch and extract profile from a URL."""

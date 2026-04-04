@@ -9,19 +9,43 @@ client = OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
 
 def _evidence_snippet(profile: dict) -> str:
     pieces = []
-    for key in ["what_they_do", "positioning", "team_size"]:
-        value = profile.get(key)
-        if value:
-            pieces.append(str(value).strip())
-    clients = profile.get("clients") or []
+
+    # Handle new structure with standard_fields
+    standard_fields = profile.get("standard_fields")
+    if isinstance(standard_fields, dict) and standard_fields:
+        for key in ["what_they_do", "positioning", "team_size"]:
+            value = standard_fields.get(key)
+            if value:
+                pieces.append(str(value).strip())
+        clients = standard_fields.get("clients") or []
+        recent_work = standard_fields.get("recent_work") or []
+    else:
+        # Fallback to old structure
+        for key in ["what_they_do", "positioning", "team_size"]:
+            value = profile.get(key)
+            if value:
+                pieces.append(str(value).strip())
+        clients = profile.get("clients") or []
+        recent_work = profile.get("recent_work") or []
+
     if isinstance(clients, list) and clients:
         pieces.append("Clients: " + ", ".join(str(c) for c in clients[:3]))
-    recent_work = profile.get("recent_work") or []
     if isinstance(recent_work, list) and recent_work:
         rw = [str(item.get("text", "")).strip() for item in recent_work[:2] if isinstance(item, dict)]
         rw = [x for x in rw if x]
         if rw:
             pieces.append("Recent work: " + "; ".join(rw))
+
+    # Add extra_fields summary if present
+    extra_fields = profile.get("extra_fields", {})
+    if isinstance(extra_fields, dict) and extra_fields:
+        extra_summary = []
+        for key, value in list(extra_fields.items())[:3]:
+            if value and value != [] and value != {}:
+                extra_summary.append(f"{key}: {str(value)[:50]}")
+        if extra_summary:
+            pieces.append("Extra info: " + "; ".join(extra_summary))
+
     return " | ".join(pieces)[:280]
 
 
